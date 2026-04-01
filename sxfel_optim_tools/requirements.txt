@@ -1,0 +1,21 @@
+# SXFEL 优化工具箱依赖
+
+# 核心依赖
+numpy>=1.20.0
+nevergrad>=0.5.0
+tqdm>=4.60.0
+
+# 可视化
+matplotlib>=3.5.0
+
+# 数据存储
+h5py>=3.0.0
+
+# EPICS 接口
+epics>=3.4.0
+
+# 可选：GUI
+# PyQt5>=5.15.0
+
+# 可选：科学计算
+# scipy>=1.7.0

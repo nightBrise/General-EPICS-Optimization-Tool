@@ -1,0 +1,24 @@
+# 旧代码（已废弃）
+legacy/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+*.ipynb_checkpoints/
+
+# Results
+results/*.h5
+results/*.png
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

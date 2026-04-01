@@ -1,0 +1,89 @@
+"""轨道目标函数模块
+
+优化目标：使所有BPM的读数接近0或参考轨道
+评分公式：score = sqrt(sum((x_i - x_ref_i)^2))
+"""
+import numpy as np
+import time
+
+from .base import BaseObjective
+from .registry import register_objective
+from .metrics import metrics
+from ..simulator import caget_many
+from ..utils import safe_device_operation
+
+
+@register_objective("orbit")
+class OrbitObjective(BaseObjective):
+    """轨道优化目标函数
+
+    支持两种模式：
+    - 不提供 reference_orbit：优化到全0轨道
+    - 提供 reference_orbit：优化到指定参考轨道
+    """
+
+    def __init__(self, config):
+        """初始化轨道目标函数
+
+        Args:
+            config: 配置字典，可包含：
+                - objective.read_pvs: BPM PV列表
+                - objective.params.reference_orbit: 参考轨道字典（可选）
+        """
+        super().__init__(config)
+        self.bpm_pvs = self.read_pvs
+        self.reference_orbit = self.params.get('reference_orbit', {})
+
+    def get_score(self, params, device_pvs):
+        """评估轨道偏移程度
+
+        Args:
+            params: 校正器参数列表
+            device_pvs: 校正器PV列表
+
+        Returns:
+            float: 轨道偏移评分（越小越好）
+        """
+        # 安全设置设备参数
+        success = safe_device_operation(device_pvs, params, self.config)
+        if not success:
+            return float('inf')
+
+        # 等待设备稳定
+        time.sleep(0.5)
+
+        # 获取BPM读数
+        bpm_readings = self._get_bpm_readings()
+
+        # 计算与参考轨道的偏差
+        ref_values = [self.reference_orbit.get(pv, 0.0) for pv in self.bpm_pvs]
+        diff = np.array(bpm_readings) - np.array(ref_values)
+        score = np.sqrt(np.sum(diff**2))
+
+        # 更新指标
+        current_metrics = {
+            'orbit_score': score,
+            'bpm_readings': bpm_readings,
+            'ref_values': ref_values,
+            'deviations': diff.tolist(),
+            'params': params.copy()
+        }
+        metrics.update(current_metrics, score)
+
+        return score
+
+    def _get_bpm_readings(self):
+        """获取所有BPM的轨道读数"""
+        if not self.bpm_pvs:
+            return [0.0] * 10
+
+        readings = caget_many(self.bpm_pvs)
+        # 将None替换为0
+        return [r if r is not None else 0.0 for r in readings]
+
+
+# 兼容旧名称
+@register_objective("orbit_zero")
+class OrbitZeroObjective(OrbitObjective):
+    """轨道零点优化目标函数（兼容旧接口）"""
+    pass
