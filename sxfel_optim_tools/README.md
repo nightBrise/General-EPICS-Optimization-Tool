@@ -50,6 +50,30 @@ python run_optimization.py --config config_orbit.json --mode zero --budget 50
 python run_optimization.py --config config_orbit.json --mode ref --budget 50
 ```
 
+## 模拟器与真实 EPICS 切换
+
+系统默认使用 **模拟器模式** 进行测试，无需连接真实 EPICS 设备。
+
+### 切换到真实 EPICS
+
+修改 `core/utils.py` 中的导入语句：
+
+```python
+# 模拟器模式（默认）
+from .simulator import caget, caput, caget_many, caput_many
+
+# 真实 EPICS 模式
+from epics import caget, caput, caget_many, caput_many
+```
+
+### 模拟器支持的功能
+
+- 束流图像模拟（YAG 相机）
+- BPM 轨道模拟
+- 四极磁铁、校正器等设备模拟
+
+详细说明请参阅：[统一接口设计](docs/unified_interface.md#epics与模拟器切换机制)
+
 ## 配置说明
 
 详细配置参数说明：

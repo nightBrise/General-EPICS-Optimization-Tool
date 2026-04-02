@@ -42,5 +42,5 @@ class BaseObjective(ABC):
         Returns:
             list: PV 读数列表
         """
-        from ..simulator import caget_many
+        from ..epics_backend import caget_many
         return caget_many(self.read_pvs)

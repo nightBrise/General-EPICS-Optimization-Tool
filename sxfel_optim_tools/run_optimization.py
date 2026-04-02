@@ -120,9 +120,8 @@ def main():
         print(f"最佳评分: {best_score:.6f}")
 
         # 保存结果
-        if hasattr(objective_fn, 'save_results'):
-            result_file = objective_fn.save_results(history, config)
-            print(f"结果已保存至: {result_file}")
+        result_file = objective_fn.save_results(history, config)
+        print(f"结果已保存至: {result_file}")
 
         # 保存可视化图片
         plot_optimization_summary(history)

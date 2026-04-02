@@ -11,7 +11,7 @@ import os
 from .base import BaseObjective
 from .registry import register_objective
 from .metrics import metrics
-from ..simulator import caget, caput, caget_many, caput_many
+from ..epics_backend import caget, caput, caget_many, caput_many
 from ..utils import (
     safe_device_operation,
     select_optimization_devices,
@@ -136,6 +136,20 @@ class BeamObjective(BaseObjective):
         roundness = min(size_x, size_y) / max(size_x, size_y) if max(size_x, size_y) > 0 else 0
 
         return raw_images[0], size_x, size_y, centroid_x, centroid_y, combined_size, roundness
+
+    def save_results(self, history, config, results_dir='results'):
+        """保存优化结果到HDF5文件
+
+        Args:
+            history: 优化历史字典
+            config: 配置字典
+            results_dir: 结果保存目录
+
+        Returns:
+            str: 保存的文件路径
+        """
+        from ..results import save_beam
+        return save_beam(history, config, results_dir)
 
 
 # -------------------------------------

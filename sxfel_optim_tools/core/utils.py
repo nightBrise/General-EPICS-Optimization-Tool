@@ -4,9 +4,8 @@
 """
 import numpy as np
 import time
-# 使用模拟器进行测试
-from .simulator import caget, caput, caget_many, caput_many
-# from epics import caget, caput, caget_many, caput_many
+# 使用统一的 EPICS 后端选择器（支持运行时切换模拟器/真实 EPICS）
+from .epics_backend import caget, caput, caget_many, caput_many
 
 
 def load_config(config_file='config.json'):

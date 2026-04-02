@@ -25,12 +25,13 @@ class Optimizer:
         self.objective_fn = objective_fn
         self.opt_config = config.get('optimization', {})
 
-    def run(self, device_types=None, device_pvs=None):
+    def run(self, device_types=None, device_pvs=None, progress_callback=None):
         """执行优化
 
         Args:
             device_types: 要优化的设备类型列表
             device_pvs: 要优化的具体设备PV列表
+            progress_callback: 进度回调函数，签名: callback(iteration, budget, current_score, best_score)
 
         Returns:
             tuple: (最佳参数, 最佳分数, 设备PV列表, 优化历史)
@@ -146,6 +147,10 @@ class Optimizer:
                 # 更新进度条描述
                 elapsed = time.time() - start_time
                 tqdm.write(f"  当前: {value:.4f} 最佳: {best_score_so_far:.4f} 耗时: {elapsed:.1f}s")
+
+                # 调用进度回调
+                if progress_callback:
+                    progress_callback(i + 1, budget, value, best_score_so_far)
 
             except Exception as e:
                 print(f"\n错误 (迭代 {i+1}): {e}")

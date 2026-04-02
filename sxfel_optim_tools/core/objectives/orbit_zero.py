@@ -9,7 +9,7 @@ import time
 from .base import BaseObjective
 from .registry import register_objective
 from .metrics import metrics
-from ..simulator import caget_many
+from ..epics_backend import caget_many
 from ..utils import safe_device_operation
 
 
@@ -80,6 +80,20 @@ class OrbitObjective(BaseObjective):
         readings = caget_many(self.bpm_pvs)
         # 将None替换为0
         return [r if r is not None else 0.0 for r in readings]
+
+    def save_results(self, history, config, results_dir='results'):
+        """保存优化结果到HDF5文件
+
+        Args:
+            history: 优化历史字典
+            config: 配置字典
+            results_dir: 结果保存目录
+
+        Returns:
+            str: 保存的文件路径
+        """
+        from ..results import save_orbit
+        return save_orbit(history, config, results_dir, orbit_mode='zero')
 
 
 # 兼容旧名称

@@ -8,164 +8,156 @@
 
 ## 项目概述
 
-这是一个**束流优化系统**，包含两个独立模块：
-1. **束流尺寸优化**：通过调整四极磁铁使束流在YAG相机上呈现最小尺寸
-2. **轨道优化**：通过调整校正器使BPM读数最小化或接近参考轨道
+**SXFEL 优化工具箱** - 通用加速器优化框架，支持束流尺寸优化、轨道优化等多种优化任务。
 
-系统使用Nevergrad无梯度优化算法，支持真实EPICS控制和模拟器测试。
+- 统一入口：`python run_optimization.py --config <config_file>`
+- 配置驱动：新增优化任务只需提供配置文件，无需修改代码
+- EPICS/模拟器双模式：测试时使用模拟器，生产环境切换到真实 EPICS
 
 ## 常用命令
 
 ```bash
-# 束流优化（使用模拟器测试）
-python beam_size_optimization.py
+# 安装依赖
+pip install -r requirements.txt
 
-# 轨道优化
-python orbit_optimization.py                  # 交互式选择模式
-python orbit_optimization.py --mode zero      # 零点模式
-python orbit_optimization.py --mode reference # 参考轨道模式
+# 束流尺寸优化
+python run_optimization.py --config config_beam.json --budget 50
 
-# 模拟器测试
-python beam_simulation_tool.py
+# 轨道优化（全0模式）
+python run_optimization.py --config config_orbit.json --mode zero --budget 50
 
-# 可视化
-python visualization.py [结果文件.h5]
+# 轨道优化（参考轨道模式）
+python run_optimization.py --config config_orbit.json --mode ref --budget 50
 
-# GUI查看结果
-python gui_results.py [结果文件.h5]
+# 指定算法
+python run_optimization.py --config config_beam.json --algorithm NGOpt
 ```
 
 ## 项目结构
 
 ```
-beam_size_optimization/
-├── beam_size_optimization.py    # 束流优化入口
-├── orbit_optimization.py        # 轨道优化入口
-├── config_beam.json            # 束流优化配置
-├── config_orbit.json           # 轨道优化配置
-├── optimization/               # 优化框架
-│   ├── __init__.py
-│   ├── optimizer.py           # 通用优化器（Nevergrad封装）
-│   ├── objectives.py          # 三种目标函数
-│   └── utils.py               # 通用工具（配置加载、设备操作）
-├── beam_objectives.py          # 束流优化目标函数和工具
-├── beam_simulation_tool.py     # EPICS模拟器（支持BPM轨道）
-├── visualization.py            # 可视化工具
-├── gui_results.py              # GUI结果查看
-└── results/                    # 优化结果目录
+sxfel_optim_tools/
+├── run_optimization.py          # 统一入口
+├── config_beam.json             # 束流优化配置
+├── config_orbit.json            # 轨道优化配置
+├── requirements.txt             # Python 依赖
+├── core/                        # 核心模块
+│   ├── objectives/              # 目标函数（注册机制）
+│   │   ├── base.py             # 基类 BaseObjective
+│   │   ├── registry.py         # @register_objective 注册表
+│   │   ├── beam.py             # 束流目标 (beam_size)
+│   │   ├── orbit_zero.py       # 零点轨道 (orbit_zero)
+│   │   ├── orbit_ref.py        # 参考轨道 (orbit_ref)
+│   │   └── metrics.py          # 线程安全指标追踪器
+│   ├── optimizer.py            # Nevergrad 封装
+│   ├── simulator.py            # EPICS 模拟器
+│   └── utils.py               # 通用工具函数
+├── tools/                      # 辅助工具
+│   └── visualize.py           # 结果可视化
+└── docs/                       # 详细文档
 ```
 
 ## 架构
 
 ### 核心流程
 
-**束流优化**：`beam_size_optimization.py` → `optimize_beam()` → Nevergrad → `objective_function()` → EPICS/模拟器 → YAG相机
-
-**轨道优化**：`orbit_optimization.py` → `Optimizer.run()` → `OrbitZeroObjective/OrbitRefObjective` → EPICS/模拟器 → BPM
-
-### 关键模块
-
-- **`optimization/optimizer.py`**：`Optimizer`类封装Nevergrad优化循环，支持任意目标函数
-- **`optimization/objectives.py`**：三种目标函数
-  - `BeamObjective` - 束流尺寸优化
-  - `OrbitZeroObjective` - 轨道零点优化（score = √Σ(xᵢ² + yᵢ²)）
-  - `OrbitRefObjective` - 轨道参考优化（score = √Σ(xᵢ - xᵣᵢₒᵦ)²）
-- **`beam_objectives.py`**：束流优化专用函数（图像处理、`optimize_beam()`等）
-- **`beam_simulation_tool.py`**：`SimpleEPICSSimulator`模拟EPICS PV，支持相机图像和BPM轨道
-- **`optimization/utils.py`**：`load_config`, `safe_device_operation`, `select_optimization_devices`等
-
-### EPICS/模拟器切换机制
-
-**重要设计**：所有EPICS操作通过 `beam_simulation_tool.py` 模拟，切换时只需修改各文件的导入语句。
-
-**模拟模式**（当前默认）：
-```python
-from beam_simulation_tool import caget, caput, caget_many, caput_many
+```
+run_optimization.py → create_objective(config) → Optimizer.run() → objective.get_score()
 ```
 
-**真实EPICS模式**：
+### 目标函数注册机制
+
 ```python
+# 注册新目标函数
+@register_objective("my_objective")
+class MyObjective(BaseObjective):
+    def get_score(self, params, device_pvs):
+        # 评分逻辑
+        return score
+
+# 使用配置文件
+{
+  "objective": {"type": "my_objective", ...}
+}
+```
+
+### EPICS/模拟器切换
+
+默认使用模拟器（用于测试）。切换到真实 EPICS 需修改 `core/utils.py` 导入：
+
+```python
+# 当前（模拟器）
+from .simulator import caget, caput, caget_many, caput_many
+
+# 切换到真实 EPICS
 from epics import caget, caput, caget_many, caput_many
 ```
 
-需要切换的文件：
-- `beam_objectives.py`
-- `optimization/objectives.py`
-- `optimization/utils.py`
+## 配置格式
 
-### 结果存储
+### 统一配置字段
 
-- 束流优化：`results/optimization_YYYYMMDD_HHMMSS.h5`
-- 轨道优化：`results/orbit_optimization_YYYYMMDD_HHMMSS.h5`
+| 字段 | 说明 |
+|------|------|
+| `name` | 任务名称 |
+| `objective.type` | 目标函数类型（beam_size, orbit_zero, orbit_ref） |
+| `objective.read_pvs` | 读取的 EPICS PV 列表 |
+| `devices` | 设备配置（quadrupoles, correctors 等） |
+| `optimization.algorithm` | 算法（Compass, NGOpt, CMA, PSO） |
+| `optimization.budget` | 迭代次数 |
 
-HDF5结构：
-- `/metadata` - 算法、预算、设备PV列表
-- `/iterations/iter_N` - 每次迭代的参数、评分
-- `/summary` - 初始值和最优值
-- `/convergence` - 收敛数据
+### 束流优化配置
 
-## 配置
-
-### config_beam.json（束流优化）
 ```json
 {
-  "camera": {"pv": "LA-BI:PRF22:RAW:ArrayData", "shape": [1392, 1040]},
-  "image_processing": {"num_averages": 3},
-  "optimization": {"algorithm": "Compass", "budget": 50, "early_stopping": {...}},
-  "target_diagonal_size_pixels": 0,
-  "maintain_position": true,
+  "objective": {
+    "type": "beam_size",
+    "params": {"shape": [1392, 1040], "num_averages": 3}
+  },
   "devices": {"quadrupoles": [...], "correctors": [...]}
 }
 ```
 
-### config_orbit.json（轨道优化）
+### 轨道优化配置
+
 ```json
 {
-  "bpm_pvs": ["LA-BI:SBPM30:POS_X", "LA-BI:SBPM30:POS_Y"],
-  "reference_orbit": {"LA-BI:SBPM30:POS_X": 0.0, "LA-BI:SBPM30:POS_Y": 0.0},
-  "optimization": {"algorithm": "Compass", "budget": 50, ...},
+  "objective": {
+    "type": "orbit",
+    "params": {"reference_orbit": {...}}
+  },
   "devices": {"correctors": [...]}
 }
 ```
 
-## 重要代码备注
+## 关键模块
 
-### EPICS与模拟器切换
-在需要使用真实EPICS时，修改以下文件的导入：
-- `beam_objectives.py`：`from epics import caget, caput, caget_many, caput_many`
-- `optimization/objectives.py`：`from epics import caget, caput, caget_many, caput_many`
-- `optimization/utils.py`：`from epics import caget, caput, caget_many, caput_many`
+- **`core/objectives/registry.py`**：`@register_objective` 装饰器，`create_objective()` 工厂函数
+- **`core/optimizer.py`**：`Optimizer` 类封装 Nevergrad 优化循环，支持早停
+- **`core/simulator.py`**：`SimpleEPICSSimulator` 模拟 EPICS PV，支持相机图像和 BPM 轨道
+- **`core/utils.py`**：`load_config`, `safe_device_operation`, `select_optimization_devices`
 
-### 模拟器支持
-- `beam_simulation_tool.py` 提供 `SimpleEPICSSimulator` 类，支持：
-  - 相机图像模拟（`LA-BI:PRF22:RAW:ArrayData` / `LA-BI:PRF29:RAW:ArrayData`）
-  - BPM轨道模拟（`LA-BI:SBPM{index}:POS_X/POS_Y`）
-  - 四极磁铁、校正器等设备模拟
+## 评分公式
 
-### BPM PV格式
-- 格式：`LA-BI:SBPM{index}:POS_X` 或 `LA-BI:SBPM{index}:POS_Y`
-- 模拟器中BPM读数由初始偏移和校正器传递矩阵共同决定
+**束流优化**：
+```
+score = 0.5 * size_score + 0.5 * non_roundness_penalty
+```
 
-### 相机图像
-- 配置中shape为`[宽, 高]`，但EPICS数据reshape使用F-order（列优先）
-- 模拟器支持PRF22和PRF29两种相机PV
+**轨道优化**：
+```
+score = sqrt(sum((bpm_reading - target)^2))
+```
+
+## 新增目标函数
+
+1. 在 `core/objectives/` 下编写类，使用 `@register_objective` 注册
+2. 继承 `BaseObjective`，实现 `get_score(params, device_pvs)`
+3. 创建配置文件
+4. 运行 `python run_optimization.py --config <your_config.json>`
 
 ## 开发规范
 
-### 代码风格
-遵循 [Google Python 代码风格指南](https://google.github.io/styleguide/pyguide.html)：
-
-- **命名规范**：
-  - 函数/变量：`snake_case`
-  - 类名：`CapWords`
-  - 常量：`ALL_CAPS`
-  - 私有成员：前导下划线
-
-- **导入顺序**：标准库 → 第三方库 → 本地模块
-
-- **行长度**：最大100字符
-
-- **文档字符串**：公共模块/函数/类需包含docstring
-
-### 中文注释
-所有代码注释使用中文。
+- 代码注释使用中文
+- 遵循 Google Python 代码风格
+- 导入顺序：标准库 → 第三方库 → 本地模块
