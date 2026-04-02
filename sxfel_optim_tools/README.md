@@ -53,4 +53,4 @@ Web UI 界面（Gradio）正在开发中，暂不可用。命令行工具已完�
 ## 支持
 
 - 常规问题: zhangny@sari.ac.cn, zhangbw@sari.ac.cn
-- 版本: 2.2
+- 最后更新: 2026-04-02

@@ -27,11 +27,42 @@
 ### 评分公式
 
 ```
-score = sqrt(sum((bpm_reading_i - target_i)^2))
+score = RMS + α×Peak + β×Roughness + γ×Coupling + δ×Skew
 ```
 
-- `bpm_reading_i`: 第 i 个 BPM 的读数
-- `target_i`: 目标值（全0时为 0.0，参考模式时为 `reference_orbit` 中配置的值）
+| 分量 | 含义 | 说明 |
+|------|------|------|
+| RMS | 整体偏差均方根 | `sqrt(mean((bpm_reading - target)²))`，反映整体轨道质量 |
+| Peak | 最大偏差 | `max(|bpm_reading - target|)`，防止局部最差点失控 |
+| Roughness | 轨道平滑性 | 相邻 BPM 偏差变化的标准差，避免轨道剧烈振荡 |
+| Coupling | XY耦合度 | X 和 Y 偏差的相关系数，反映束流扭曲程度 |
+| Skew | 轨道倾斜度 | 入口到出口 BPM 偏差的线性倾斜 |
+
+### 权重模式
+
+通过 `objective.params.mode` 选择评分模式：
+
+| 模式 | α | β | γ | δ | 适用场景 |
+|------|---|---|---|---|---------|
+| `smooth` | 0.2 | 0.4 | 0.2 | 0.2 | 追求轨道平滑稳定 |
+| `balanced` | 0.3 | 0.2 | 0.1 | 0.1 | 平衡精度与平滑（默认） |
+| `aggressive` | 0.5 | 0.0 | 0.0 | 0.0 | 追求极致精度 |
+
+### 配置示例
+
+```json
+{
+  "objective": {
+    "type": "orbit",
+    "read_pvs": ["LA-BI:SBPM1:POS_X", "LA-BI:SBPM1:POS_Y"],
+    "params": {
+      "mode": "balanced"
+    }
+  }
+}
+```
+
+如不指定 `mode`，默认使用 `balanced` 模式。
 
 ## 配置参数
 
