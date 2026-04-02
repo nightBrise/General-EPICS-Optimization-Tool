@@ -95,29 +95,41 @@ def save_beam(history, config, results_dir='results'):
 
         # ========== iterations ==========
         iterations_group = f.create_group('iterations')
-        total_iters = len(iter_history.get('scores', []))
+
+        # 获取各历史数据列表，添加边界保护
+        scores_list = iter_history.get('scores', [])
+        physical_sizes_list = iter_history.get('physical_sizes', [])
+        size_x_list = iter_history.get('size_x', [])
+        size_y_list = iter_history.get('size_y', [])
+        roundness_list = iter_history.get('roundness', [])
+        centroid_x_list = iter_history.get('centroid_x', [])
+        centroid_y_list = iter_history.get('centroid_y', [])
+        params_list = iter_history.get('parameters', [])
+        images_list = iter_history.get('images', [])
+        is_best_list = iter_history.get('is_best', [])
+
+        total_iters = len(scores_list)
 
         for i in range(total_iters):
             iter_group = iterations_group.create_group(f'iter_{i+1}')
 
             # params
-            params = iter_history.get('parameters', [[]])[i] if i < len(iter_history.get('parameters', [[]])) else []
+            params = params_list[i] if i < len(params_list) else []
             if params:
                 iter_group.create_dataset('params', data=np.array(params, dtype=np.float32))
 
-            iter_group.attrs['score'] = iter_history.get('scores', [float('inf')])[i]
-            iter_group.attrs['physical_size'] = iter_history.get('physical_sizes', [0])[i]
-            iter_group.attrs['size_x'] = iter_history.get('size_x', [0])[i]
-            iter_group.attrs['size_y'] = iter_history.get('size_y', [0])[i]
-            iter_group.attrs['roundness'] = iter_history.get('roundness', [0])[i]
-            iter_group.attrs['centroid_x'] = iter_history.get('centroid_x', [0])[i]
-            iter_group.attrs['centroid_y'] = iter_history.get('centroid_y', [0])[i]
-            iter_group.attrs['is_best'] = iter_history.get('is_best', [False])[i] if i < len(iter_history.get('is_best', [])) else False
+            iter_group.attrs['score'] = scores_list[i] if i < len(scores_list) else float('inf')
+            iter_group.attrs['physical_size'] = physical_sizes_list[i] if i < len(physical_sizes_list) else 0
+            iter_group.attrs['size_x'] = size_x_list[i] if i < len(size_x_list) else 0
+            iter_group.attrs['size_y'] = size_y_list[i] if i < len(size_y_list) else 0
+            iter_group.attrs['roundness'] = roundness_list[i] if i < len(roundness_list) else 0
+            iter_group.attrs['centroid_x'] = centroid_x_list[i] if i < len(centroid_x_list) else 0
+            iter_group.attrs['centroid_y'] = centroid_y_list[i] if i < len(centroid_y_list) else 0
+            iter_group.attrs['is_best'] = is_best_list[i] if i < len(is_best_list) else False
 
             # image
-            images = iter_history.get('images', [])
-            if i < len(images) and images[i] is not None:
-                img = images[i]
+            if i < len(images_list) and images_list[i] is not None:
+                img = images_list[i]
                 if img.dtype != np.uint16:
                     img = img.astype(np.uint16)
                 iter_group.create_dataset('image', data=img,
@@ -214,32 +226,40 @@ def save_orbit(history, config, results_dir='results', orbit_mode='zero'):
 
         # ========== iterations ==========
         iterations_group = f.create_group('iterations')
-        total_iters = len(iter_history.get('scores', []))
+
+        # 获取各历史数据列表，添加边界保护
+        scores_list = iter_history.get('scores', [])
+        params_list = iter_history.get('parameters', [])
+        bpm_readings_list = iter_history.get('bpm_readings', [])
+        ref_values_list = iter_history.get('ref_values', [])
+        deviations_list = iter_history.get('deviations', [])
+
+        total_iters = len(scores_list)
 
         for i in range(total_iters):
             iter_group = iterations_group.create_group(f'iter_{i+1}')
 
             # params
-            params = iter_history.get('parameters', [[]])[i] if i < len(iter_history.get('parameters', [[]])) else []
+            params = params_list[i] if i < len(params_list) else []
             if params:
                 iter_group.create_dataset('params', data=np.array(params, dtype=np.float32))
 
-            iter_group.attrs['score'] = iter_history.get('scores', [float('inf')])[i]
+            iter_group.attrs['score'] = scores_list[i] if i < len(scores_list) else float('inf')
 
             # bpm readings for this iteration
-            if i < len(iter_history.get('bpm_readings', [])):
+            if i < len(bpm_readings_list) and bpm_readings_list[i]:
                 iter_group.create_dataset('bpm_readings',
-                    data=np.array(iter_history.get('bpm_readings', [])[i], dtype=np.float32))
+                    data=np.array(bpm_readings_list[i], dtype=np.float32))
 
             # ref values for this iteration
-            if i < len(iter_history.get('ref_values', [])):
+            if i < len(ref_values_list) and ref_values_list[i]:
                 iter_group.create_dataset('ref_values',
-                    data=np.array(iter_history.get('ref_values', [])[i], dtype=np.float32))
+                    data=np.array(ref_values_list[i], dtype=np.float32))
 
             # deviations for this iteration
-            if i < len(iter_history.get('deviations', [])):
+            if i < len(deviations_list) and deviations_list[i]:
                 iter_group.create_dataset('deviations',
-                    data=np.array(iter_history.get('deviations', [])[i], dtype=np.float32))
+                    data=np.array(deviations_list[i], dtype=np.float32))
 
     print(f"✓ 轨道优化结果已保存至: {filename}")
     return filename

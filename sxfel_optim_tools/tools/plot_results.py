@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
+import numpy as np
 
 from core.results import load_beam, load_orbit
 
@@ -99,10 +100,31 @@ def plot_beam_results(history, output_path=None):
 
     iter_history = history.get('iteration_history', {})
     scores = iter_history.get('scores', [])
-    iterations = range(1, len(scores) + 1)
+    num_scores = len(scores)
+
+    # 数据对齐：iteration_history 中的 scores 包含所有评估结果，
+    # 但 size_x 等指标只在评估成功（未早停）时记录
+    # 因此需要对其他数据进行截断或填充
+    size_x = iter_history.get('size_x', [])
+    size_y = iter_history.get('size_y', [])
+    roundness = iter_history.get('roundness', [])
+    centroid_x = iter_history.get('centroid_x', [])
+    centroid_y = iter_history.get('centroid_y', [])
+    physical_sizes = iter_history.get('physical_sizes', [])
+    images = iter_history.get('images', [])
+
+    # 确保所有列表与 scores 长度一致（用 NaN 填充缺失的）
+    def pad_or_truncate(arr, target_len, fill_value=np.nan):
+        if not arr:
+            return [fill_value] * target_len
+        if len(arr) < target_len:
+            return arr + [fill_value] * (target_len - len(arr))
+        return arr[:target_len]
+
+    iterations_for_plot = range(1, num_scores + 1)
 
     best_idx = history.get('best_iteration_index', 0)
-    best_iter = best_idx + 1 if best_idx < len(scores) else 1
+    best_iter = best_idx + 1 if best_idx < num_scores else 1
 
     # 动态调整图形大小
     num_devices = len(history.get('device_names', []))
@@ -113,9 +135,9 @@ def plot_beam_results(history, output_path=None):
 
     # 1. 收敛曲线
     ax1 = fig.add_subplot(2, 3, 1)
-    ax1.plot(iterations, scores, 'b-', linewidth=2)
+    ax1.plot(iterations_for_plot, scores, 'b-', linewidth=2)
     ax1.axvline(x=best_iter, color='r', linestyle='--', alpha=0.7, label=f'Best: iter {best_iter}')
-    ax1.scatter([best_iter], [scores[best_idx] if best_idx < len(scores) else scores[-1]],
+    ax1.scatter([best_iter], [scores[best_idx] if best_idx < num_scores else scores[-1]],
                 color='red', s=100, zorder=5)
     ax1.set_xlabel('Iteration')
     ax1.set_ylabel('Score')
@@ -125,12 +147,12 @@ def plot_beam_results(history, output_path=None):
 
     # 2. 束流尺寸变化
     ax2 = fig.add_subplot(2, 3, 2)
-    physical_sizes = iter_history.get('physical_sizes', [])
-    if physical_sizes:
-        valid_sizes = [s for s in physical_sizes if s != float('inf')]
-        valid_iters = [i+1 for i, s in enumerate(physical_sizes) if s != float('inf')]
-        if valid_sizes:
-            ax2.plot(valid_iters, valid_sizes, 'r-', linewidth=2, marker='s', markersize=4)
+    # physical_sizes 可能比 scores 短，需要对齐
+    padded_sizes = pad_or_truncate(physical_sizes, num_scores)
+    valid_pairs = [(i+1, s) for i, s in enumerate(padded_sizes) if s != float('inf') and not np.isnan(s)]
+    if valid_pairs:
+        valid_iters, valid_sizes = zip(*valid_pairs)
+        ax2.plot(valid_iters, valid_sizes, 'r-', linewidth=2, marker='s', markersize=4)
     ax2.set_xlabel('Iteration')
     ax2.set_ylabel('Beam Size (pixels)')
     ax2.set_title('Beam Size Evolution')
@@ -138,19 +160,19 @@ def plot_beam_results(history, output_path=None):
 
     # 3. 尺寸分量+圆度 (双Y轴)
     ax3 = fig.add_subplot(2, 3, 3)
-    size_x = iter_history.get('size_x', [])
-    size_y = iter_history.get('size_y', [])
-    roundness = iter_history.get('roundness', [])
+    padded_size_x = pad_or_truncate(size_x, num_scores)
+    padded_size_y = pad_or_truncate(size_y, num_scores)
+    padded_roundness = pad_or_truncate(roundness, num_scores)
 
     ax3.set_xlabel('Iteration')
     ax3.set_ylabel('Size (pixels)', color='blue')
-    l1, = ax3.plot(iterations, size_x, 'b-', linewidth=2, label='size_x')
-    l2, = ax3.plot(iterations, size_y, 'g-', linewidth=2, label='size_y')
+    l1, = ax3.plot(iterations_for_plot, padded_size_x, 'b-', linewidth=2, label='size_x')
+    l2, = ax3.plot(iterations_for_plot, padded_size_y, 'g-', linewidth=2, label='size_y')
     ax3.tick_params(axis='y', labelcolor='blue')
 
     ax3_twin = ax3.twinx()
     ax3_twin.set_ylabel('Roundness', color='orange')
-    l3, = ax3_twin.plot(iterations, roundness, 'orange', linewidth=2, marker='o', markersize=3, label='roundness')
+    l3, = ax3_twin.plot(iterations_for_plot, padded_roundness, 'orange', linewidth=2, marker='o', markersize=3, label='roundness')
     ax3_twin.tick_params(axis='y', labelcolor='orange')
 
     ax3.set_title('Size Components & Roundness')
@@ -159,19 +181,26 @@ def plot_beam_results(history, output_path=None):
 
     # 4. 质心运动轨迹
     ax4 = fig.add_subplot(2, 3, 4)
-    centroid_x = iter_history.get('centroid_x', [])
-    centroid_y = iter_history.get('centroid_y', [])
+    # 使用已提取的 centroid_x, centroid_y 数据，并进行填充对齐
+    padded_cx = pad_or_truncate(centroid_x, num_scores)
+    padded_cy = pad_or_truncate(centroid_y, num_scores)
 
-    if centroid_x and centroid_y and len(centroid_x) == len(centroid_y):
+    # 过滤掉 NaN 值用于绘图
+    valid_mask = ~(np.isnan(padded_cx) | np.isnan(padded_cy))
+    valid_cx = np.array(padded_cx)[valid_mask]
+    valid_cy = np.array(padded_cy)[valid_mask]
+
+    if len(valid_cx) > 0 and len(valid_cy) > 0 and len(valid_cx) == len(valid_cy):
         # 颜色渐变：冷色到暖色
-        colors = plt.cm.viridis(np.linspace(0, 1, len(centroid_x)))
-        for i in range(len(centroid_x) - 1):
-            ax4.plot(centroid_x[i:i+2], centroid_y[i:i+2],
+        colors = plt.cm.viridis(np.linspace(0, 1, len(valid_cx)))
+        for i in range(len(valid_cx) - 1):
+            ax4.plot(valid_cx[i:i+2], valid_cy[i:i+2],
                     color=colors[i], linewidth=2)
-        ax4.scatter(centroid_x[0], centroid_y[0], color='green',
+        ax4.scatter(valid_cx[0], valid_cy[0], color='green',
                    s=200, marker='*', zorder=5, label='Start')
-        ax4.scatter(centroid_x[-1], centroid_y[-1], color='red',
-                   s=200, marker='*', zorder=5, label='End')
+        if len(valid_cx) > 1:
+            ax4.scatter(valid_cx[-1], valid_cy[-1], color='red',
+                       s=200, marker='*', zorder=5, label='End')
 
     ax4.set_xlabel('Centroid X')
     ax4.set_ylabel('Centroid Y')
