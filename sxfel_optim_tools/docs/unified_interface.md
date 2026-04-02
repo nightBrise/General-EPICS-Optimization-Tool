@@ -219,6 +219,33 @@ def get_registered_objectives():
 }
 ```
 
+## Nevergrad 算法参数
+
+| 算法 | 说明 | 特有参数及默认值 | 配置示例 |
+|------|------|----------|----------|
+| NGOpt | 默认推荐算法 | 无 | `{"algorithm": "NGOpt"}` |
+| Compass | 水平集算法 | 无 | `{"algorithm": "Compass"}` |
+| CMA | 协方差矩阵适应 | population_size: 30 | `{"algorithm": "CMA"}` |
+| PSO | 粒子群优化 | swarm_size: 50 | `{"algorithm": "PSO"}` |
+| DE | 差分进化 | population_size: 30 | `{"algorithm": "DE"}` |
+| TwoPointsDE | 两点差分进化 | population_size: 30 | `{"algorithm": "TwoPointsDE"}` |
+| OnePlusOne | (1+1) 进化策略 | step_size: 0.5 | `{"algorithm": "OnePlusOne"}` |
+
+配置文件中的算法参数示例：
+
+```json
+{
+  "optimization": {
+    "algorithm": "NGOpt",
+    "budget": 50,
+    "params": {
+      "population_size": 30,
+      "swarm_size": 50
+    }
+  }
+}
+```
+
 ## 工具函数
 
 ### safe_device_operation

@@ -38,9 +38,18 @@ class BeamObjective(BaseObjective):
         self.num_averages = self.params.get('num_averages', 3)
         self.target_diagonal_size = self.params.get('target_diagonal_size_pixels', 0)
         self.maintain_position = self.params.get('maintain_position', False)
+
+        # 参数配置
+        self.repetition_rate = self.params.get('repetition_rate', 10)
+        self.min_adjust_interval = self.params.get('min_adjust_interval', 6)
+        self.poll_interval = self.params.get('poll_interval', 0.2)
+        self.tolerance = self.params.get('tolerance', 0.0001)
+        self.max_wait = self.params.get('max_wait', 10)
+
         self.initial_centroid_x = None
         self.initial_centroid_y = None
         self._raw_image = None
+        self._last_adjust_time = 0
 
     def get_score(self, params, device_pvs):
         """评估束流尺寸
@@ -52,15 +61,41 @@ class BeamObjective(BaseObjective):
         Returns:
             float: 综合评分（越小越好）
         """
-        # 安全设置设备参数
+        # 1. 安全设置设备参数
         success = safe_device_operation(device_pvs, params, self.config)
         if not success:
             return float('inf')
 
-        # 等待设备稳定
-        time.sleep(2)
+        # 2. 检查硬件调整间隔
+        elapsed = time.time() - self._last_adjust_time
+        if elapsed < self.min_adjust_interval:
+            wait_time = self.min_adjust_interval - elapsed
+            print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
+            time.sleep(wait_time)
 
-        # 获取平均图像和束斑指标
+        # 3. 轮询等待所有元件达到设定值
+        from ..utils import wait_for_all_devices_settled
+        success, failed_devs = wait_for_all_devices_settled(
+            device_pvs, params,
+            tolerance=self.tolerance,
+            max_wait=self.max_wait,
+            poll_interval=self.poll_interval
+        )
+
+        if not success:
+            error_msg = "错误: 以下元件写入失败:\n"
+            for pv, info in failed_devs.items():
+                if info['deviation'] is not None:
+                    error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.6f}\n"
+                else:
+                    error_msg += f"  - {pv}: 读取失败\n"
+            error_msg += "请处理上述问题，优化将回滚到初始参数。"
+            from core.optimizer import OptimizationError
+            raise OptimizationError(error_msg)
+
+        self._last_adjust_time = time.time()
+
+        # 4. 获取平均图像和束斑指标
         raw_image, size_x, size_y, centroid_x, centroid_y, combined_size, roundness = \
             self._get_average_YAG_image()
 

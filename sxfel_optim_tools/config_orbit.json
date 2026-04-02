@@ -47,7 +47,13 @@
         "LA-BI:SBPM9:POS_Y": -0.5,
         "LA-BI:SBPM10:POS_X": -0.4,
         "LA-BI:SBPM10:POS_Y": -0.6
-      }
+      },
+      "repetition_rate": 10,
+      "num_bpm_averages": 5,
+      "min_adjust_interval": 6,
+      "poll_interval": 0.2,
+      "tolerance": 0.0001,
+      "max_wait": 10
     }
   },
   "bpm_pvs": [
@@ -101,6 +107,12 @@
       "enabled": true,
       "patience": 10,
       "min_relative_improvement": 0.005
+    },
+    "params": {
+      "// 算法特有参数（可选）": "",
+      "// population_size: 30,    // CMA, DE 等遗传算法": "",
+      "// swarm_size: 50,         // PSO 粒子群优化": "",
+      "// step_size: 0.5          // OnePlusOne 等": ""
     }
   },
   "devices": {

@@ -167,10 +167,6 @@ class SimpleEPICSSimulator:
         if self._is_bpm_pv(pv):
             return self._get_bpm_reading(pv)
 
-        # 模拟随机故障 (1%概率)
-        if self.random.random() < 0.01:
-            return None
-
         return self.pv_values.get(pv, 0.0)
 
     def _is_bpm_pv(self, pv):
@@ -243,13 +239,21 @@ class SimpleEPICSSimulator:
         return effect
     
     def caput(self, pv, value, wait=False, timeout=1.0):
-        """模拟caput函数"""
+        """模拟caput函数
+
+        Returns:
+            成功返回 True
+
+        Raises:
+            PVWriteError: BPM PV 是只读的
+        """
         time.sleep(0.01)  # 模拟网络延迟
 
         # BPM PV是只读的，不能设置
         if self._is_bpm_pv(pv):
-            print(f"警告: BPM PV {pv} 是只读的")
-            return False
+            # 延迟导入避免循环依赖
+            from .epics_backend import PVWriteError
+            raise PVWriteError(f"BPM PV {pv} 是只读的，无法写入")
 
         # 简单的边界限制
         quadrupoles = ['Q34', 'Q35', 'Q36', 'Q37', 'Q38', 'Q39', 'Q40']

@@ -26,6 +26,45 @@ def load_config(config_file='config.json'):
         raise
 
 
+def validate_optimization_config(config, objective_type):
+    """验证优化配置是否正确
+
+    Args:
+        config: 配置字典
+        objective_type: 目标类型 (beam_size, orbit, orbit_zero, orbit_ref)
+
+    Returns:
+        list: 警告信息列表（空表示无问题）
+    """
+    warnings = []
+
+    # 检查 budget
+    budget = config.get('optimization', {}).get('budget')
+    if not budget:
+        warnings.append("未设置 budget，将使用默认值 50")
+
+    # 检查设备
+    devices = config.get('devices', {})
+    if not devices:
+        warnings.append("未配置任何控制设备")
+
+    # 束流优化特定检查
+    if objective_type == 'beam_size':
+        camera = config.get('camera', {})
+        if not camera.get('pv'):
+            warnings.append("未配置相机 PV")
+        if not camera.get('shape'):
+            warnings.append("未配置图像尺寸")
+
+    # 轨道优化特定检查
+    if objective_type in ['orbit', 'orbit_zero', 'orbit_ref', 'orbit_zero']:
+        bpm_pvs = config.get('bpm_pvs', [])
+        if not bpm_pvs:
+            warnings.append("未配置 BPM PV 列表")
+
+    return warnings
+
+
 def get_current_values(device_pvs, timeout=2.0):
     """安全获取当前设备参数值
 
@@ -171,7 +210,6 @@ def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
         except Exception:
             all_verified = False
 
-    time.sleep(0.3)
     return True
 
 
@@ -382,3 +420,52 @@ def calculate_spot_metrics(image):
     except Exception as e:
         print(f"计算光斑指标失败: {e}")
         return float('inf'), float('inf'), -1, -1
+
+
+def wait_for_all_devices_settled(device_pvs, target_values, tolerance=0.0001, max_wait=10, poll_interval=0.2):
+    """等待所有设备达到设定值
+
+    Args:
+        device_pvs: 设备PV列表（包括所有写入元件）
+        target_values: 目标值列表
+        tolerance: 允许的偏差（默认0.0001）
+        max_wait: 最大等待时间（秒，默认10）
+        poll_interval: 轮询间隔（秒，默认0.2）
+
+    Returns:
+        tuple: (是否全部成功, {pv: {target, current, deviation}} 字典)
+    """
+    start_time = time.time()
+
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > max_wait:
+            readbacks = caget_many(device_pvs)
+            failed = {}
+            for pv, target, readback in zip(device_pvs, target_values, readbacks):
+                if readback is None or abs(readback - target) > tolerance:
+                    failed[pv] = {
+                        'target': target,
+                        'current': readback,
+                        'deviation': abs(readback - target) if readback is not None else None
+                    }
+            return False, failed
+
+        readbacks = caget_many(device_pvs)
+        all_settled = True
+        deviations = {}
+
+        for pv, target, readback in zip(device_pvs, target_values, readbacks):
+            if readback is None:
+                all_settled = False
+                deviations[pv] = None
+                continue
+            dev = abs(readback - target)
+            deviations[pv] = dev
+            if dev > tolerance:
+                all_settled = False
+
+        if all_settled:
+            return True, deviations
+
+        time.sleep(poll_interval)

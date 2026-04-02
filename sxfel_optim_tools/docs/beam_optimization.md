@@ -92,6 +92,18 @@ score = 0.5 * size_score + 0.5 * non_roundness_penalty
 | `devices.quadrupoles` | 是 | 四极磁铁设备列表 |
 | `devices.correctors` | 否 | 校正子设备列表 |
 
+### 硬件参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `repetition_rate` | 束团重复频率（Hz），用于计算采样间隔 | 10 |
+| `min_adjust_interval` | 校正子最小调整间隔（秒），硬件限制 | 6 |
+| `poll_interval` | 轮询间隔（秒） | 0.2 |
+| `tolerance` | 设定值容差 | 0.0001 |
+| `max_wait` | 最大等待时间（秒） | 10 |
+
+> **注意**：硬件参数通过 `objective.params` 配置。`min_adjust_interval` 是硬件限制，校正子调整后需等待至少指定秒数才能进行下一次调整。
+
 ### devices 配置详情
 
 每个设备配置：

@@ -27,10 +27,26 @@ class OrbitRefObjective(BaseObjective):
             config: 配置字典，应包含：
                 - objective.read_pvs: BPM PV列表
                 - objective.params.reference_orbit: 参考轨道字典
+                - objective.params.repetition_rate: 束团重复频率（Hz）
+                - objective.params.num_bpm_averages: BPM采样平均次数
+                - objective.params.min_adjust_interval: 最小调整间隔（秒）
+                - objective.params.poll_interval: 轮询间隔（秒）
+                - objective.params.tolerance: 设定值容差
+                - objective.params.max_wait: 最大等待时间（秒）
         """
         super().__init__(config)
         self.bpm_pvs = self.read_pvs
         self.reference_orbit = self.params.get('reference_orbit', {})
+
+        # 参数配置
+        self.repetition_rate = self.params.get('repetition_rate', 10)
+        self.num_bpm_averages = self.params.get('num_bpm_averages', 5)
+        self.min_adjust_interval = self.params.get('min_adjust_interval', 6)
+        self.poll_interval = self.params.get('poll_interval', 0.2)
+        self.tolerance = self.params.get('tolerance', 0.0001)
+        self.max_wait = self.params.get('max_wait', 10)
+
+        self._last_adjust_time = 0
 
     def get_score(self, params, device_pvs):
         """评估轨道与参考轨道的偏差
@@ -42,15 +58,41 @@ class OrbitRefObjective(BaseObjective):
         Returns:
             float: 轨道偏差评分（越小越好）
         """
-        # 安全设置设备参数
+        # 1. 安全设置设备参数
         success = safe_device_operation(device_pvs, params, self.config)
         if not success:
             return float('inf')
 
-        # 等待设备稳定
-        time.sleep(0.5)
+        # 2. 检查硬件调整间隔
+        elapsed = time.time() - self._last_adjust_time
+        if elapsed < self.min_adjust_interval:
+            wait_time = self.min_adjust_interval - elapsed
+            print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
+            time.sleep(wait_time)
 
-        # 获取BPM读数
+        # 3. 轮询等待所有元件达到设定值
+        from ..utils import wait_for_all_devices_settled
+        success, failed_devs = wait_for_all_devices_settled(
+            device_pvs, params,
+            tolerance=self.tolerance,
+            max_wait=self.max_wait,
+            poll_interval=self.poll_interval
+        )
+
+        if not success:
+            error_msg = "错误: 以下元件写入失败:\n"
+            for pv, info in failed_devs.items():
+                if info['deviation'] is not None:
+                    error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.6f}\n"
+                else:
+                    error_msg += f"  - {pv}: 读取失败\n"
+            error_msg += "请处理上述问题，优化将回滚到初始参数。"
+            from core.optimizer import OptimizationError
+            raise OptimizationError(error_msg)
+
+        self._last_adjust_time = time.time()
+
+        # 4. 获取BPM读数（多次采样平均）
         bpm_readings = self._get_bpm_readings()
 
         # 计算与参考轨道的偏差
@@ -71,12 +113,20 @@ class OrbitRefObjective(BaseObjective):
         return score
 
     def _get_bpm_readings(self):
-        """获取所有BPM的轨道读数"""
+        """获取所有BPM的轨道读数（多次采样平均）"""
         if not self.bpm_pvs:
             return [0.0] * 10
 
-        readings = caget_many(self.bpm_pvs)
-        return [r if r is not None else 0.0 for r in readings]
+        # 采样间隔 = 1/重复频率
+        sample_interval = 1.0 / self.repetition_rate
+
+        all_readings = []
+        for _ in range(self.num_bpm_averages):
+            readings = caget_many(self.bpm_pvs)
+            all_readings.append([r if r is not None else 0.0 for r in readings])
+            time.sleep(sample_interval)
+
+        return np.mean(all_readings, axis=0).tolist()
 
     def save_results(self, history, config, results_dir='results'):
         """保存优化结果到HDF5文件

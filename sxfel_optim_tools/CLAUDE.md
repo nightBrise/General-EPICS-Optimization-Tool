@@ -10,7 +10,8 @@
 
 **SXFEL 优化工具箱** - 通用加速器优化框架，支持束流尺寸优化、轨道优化等多种优化任务。
 
-- 统一入口：`python run_optimization.py --config <config_file>`
+- 命令行入口：`python run_optimization.py --config <config_file>`
+- Web UI 入口：`python run_ui.py`（Gradio 界面）
 - 配置驱动：新增优化任务只需提供配置文件，无需修改代码
 - EPICS/模拟器双模式：测试时使用模拟器，生产环境切换到真实 EPICS
 
@@ -20,28 +21,33 @@
 # 安装依赖
 pip install -r requirements.txt
 
-# 束流尺寸优化
+# 命令行束流尺寸优化
 python run_optimization.py --config config_beam.json --budget 50
 
-# 轨道优化（全0模式）
+# 命令行轨道优化（全0模式）
 python run_optimization.py --config config_orbit.json --mode zero --budget 50
 
-# 轨道优化（参考轨道模式）
+# 命令行轨道优化（参考轨道模式）
 python run_optimization.py --config config_orbit.json --mode ref --budget 50
 
 # 指定算法
 python run_optimization.py --config config_beam.json --algorithm NGOpt
+
+# Web UI 模式（Gradio）
+python run_ui.py
 ```
 
 ## 项目结构
 
 ```
 sxfel_optim_tools/
-├── run_optimization.py          # 统一入口
+├── run_optimization.py          # 命令行统一入口
+├── run_ui.py                    # Web UI 入口 (Gradio)
 ├── config_beam.json             # 束流优化配置
 ├── config_orbit.json            # 轨道优化配置
 ├── requirements.txt             # Python 依赖
 ├── core/                        # 核心模块
+│   ├── epics_backend.py        # EPICS 后端选择器（单例模式）
 │   ├── objectives/              # 目标函数（注册机制）
 │   │   ├── base.py             # 基类 BaseObjective
 │   │   ├── registry.py         # @register_objective 注册表
@@ -51,10 +57,16 @@ sxfel_optim_tools/
 │   │   └── metrics.py          # 线程安全指标追踪器
 │   ├── optimizer.py            # Nevergrad 封装
 │   ├── simulator.py            # EPICS 模拟器
+│   ├── results.py              # 结果保存/加载 (HDF5)
 │   └── utils.py               # 通用工具函数
 ├── tools/                      # 辅助工具
-│   └── visualize.py           # 结果可视化
-└── docs/                       # 详细文档
+│   └── plot_results.py        # 结果可视化
+├── ui/                         # Web UI 模块
+│   ├── beam_app.py            # 束流优化 Web 界面
+│   ├── orbit_app.py           # 轨道优化 Web 界面
+│   └── theme.py              # UI 主题
+├── docs/                       # 详细文档
+└── legacy/                     # 历史版本（参考用）
 ```
 
 ## 架构
@@ -83,14 +95,21 @@ class MyObjective(BaseObjective):
 
 ### EPICS/模拟器切换
 
-默认使用模拟器（用于测试）。切换到真实 EPICS 需修改 `core/utils.py` 导入：
+通过 `core/epics_backend.py` 的单例模式 `EPICSBackend` 运行时切换：
 
 ```python
-# 当前（模拟器）
-from .simulator import caget, caput, caget_many, caput_many
+from core.epics_backend import set_backend, is_simulator
 
-# 切换到真实 EPICS
-from epics import caget, caput, caget_many, caput_many
+# 模拟器模式（默认）
+set_backend(use_simulator=True)
+
+# 真实 EPICS 模式
+set_backend(use_simulator=False)
+```
+
+命令行使用 `--simulator` 参数切换：
+```bash
+python run_optimization.py --config config.json --simulator
 ```
 
 ## 配置格式
@@ -105,6 +124,17 @@ from epics import caget, caput, caget_many, caput_many
 | `devices` | 设备配置（quadrupoles, correctors 等） |
 | `optimization.algorithm` | 算法（Compass, NGOpt, CMA, PSO） |
 | `optimization.budget` | 迭代次数 |
+
+### 硬件参数（objective.params）
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `repetition_rate` | 束团重复频率（Hz），用于计算 BPM 采样间隔 | 10 |
+| `num_averages` / `num_bpm_averages` | 采样平均次数 | 3/5 |
+| `min_adjust_interval` | 校正子最小调整间隔（秒），硬件限制 | 6 |
+| `poll_interval` | 轮询间隔（秒） | 0.2 |
+| `tolerance` | 设定值容差 | 0.0001 |
+| `max_wait` | 最大等待时间（秒） | 10 |
 
 ### 束流优化配置
 
@@ -132,10 +162,11 @@ from epics import caget, caput, caget_many, caput_many
 
 ## 关键模块
 
+- **`core/epics_backend.py`**：`EPICSBackend` 单例类，统一管理模拟器/真实 EPICS 切换
 - **`core/objectives/registry.py`**：`@register_objective` 装饰器，`create_objective()` 工厂函数
-- **`core/optimizer.py`**：`Optimizer` 类封装 Nevergrad 优化循环，支持早停
+- **`core/optimizer.py`**：`Optimizer` 类封装 Nevergrad 优化循环，支持早停和回滚
 - **`core/simulator.py`**：`SimpleEPICSSimulator` 模拟 EPICS PV，支持相机图像和 BPM 轨道
-- **`core/utils.py`**：`load_config`, `safe_device_operation`, `select_optimization_devices`
+- **`core/utils.py`**：`load_config`, `safe_device_operation`, `select_optimization_devices`, `wait_for_all_devices_settled`
 
 ## 评分公式
 

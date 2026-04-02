@@ -8,7 +8,12 @@ import nevergrad as ng
 import sys
 from tqdm import tqdm
 
-from .utils import select_optimization_devices
+from .utils import select_optimization_devices, safe_device_operation
+
+
+class OptimizationError(Exception):
+    """优化过程异常，用于触发回滚"""
+    pass
 
 
 class Optimizer:
@@ -24,6 +29,17 @@ class Optimizer:
         self.config = config
         self.objective_fn = objective_fn
         self.opt_config = config.get('optimization', {})
+        self.initial_device_values = None
+        self.initial_device_pvs = None
+
+    def rollback(self):
+        """回滚到初始参数"""
+        if self.initial_device_values is not None:
+            print("\n执行回滚，恢复初始参数...")
+            safe_device_operation(self.initial_device_pvs, self.initial_device_values, self.config)
+            print("✓ 回滚完成")
+        else:
+            print("错误: 没有可用的初始参数")
 
     def run(self, device_types=None, device_pvs=None, progress_callback=None):
         """执行优化
@@ -40,10 +56,17 @@ class Optimizer:
         from .objectives.metrics import metrics
         metrics.reset()
 
+        # 获取目标类型
+        obj_type = self.config.get('objective', {}).get('type', 'unknown')
+
         # 选择设备
         device_pvs, current_values, bounds = select_optimization_devices(
             self.config, device_types, device_pvs
         )
+
+        # 保存初始值（用于回滚）
+        self.initial_device_values = current_values.copy()
+        self.initial_device_pvs = device_pvs.copy()
 
         # 定义参数空间
         parametrization = ng.p.Instrumentation(
@@ -187,6 +210,32 @@ class Optimizer:
                 if progress_callback:
                     progress_callback(i + 1, budget, value, best_score_so_far)
 
+                # 根据目标类型显示详细信息
+                elapsed = time.time() - start_time
+                if obj_type == 'beam_size':
+                    size = current_metrics.get('size_x', 0)
+                    size_y = current_metrics.get('size_y', 0)
+                    roundness = current_metrics.get('roundness', 0)
+                    pos_dist = current_metrics.get('position_distance', None)
+                    pos_info = f", 位置偏移={pos_dist:.1f}px" if pos_dist is not None else ""
+                    tqdm.write(f"  当前: 尺寸=({size:.1f}, {size_y:.1f}), 圆度={roundness:.3f}, Score={value:.4f}{pos_info}")
+                    best_metrics = metrics.get_best()
+                    if best_metrics:
+                        best_size = best_metrics.get('size_x', 0)
+                        best_roundness = best_metrics.get('roundness', 0)
+                        tqdm.write(f"  最佳: 尺寸=({best_size:.1f}, ...), 圆度={best_roundness:.3f}, Score={best_score_so_far:.4f}")
+                elif obj_type in ['orbit', 'orbit_zero', 'orbit_ref']:
+                    bpm_dev = current_metrics.get('bpm_deviation', 0)
+                    tqdm.write(f"  当前: BPM偏差={bpm_dev:.4f}mm, Score={value:.4f}")
+                    best_metrics = metrics.get_best()
+                    if best_metrics:
+                        best_dev = best_metrics.get('bpm_deviation', 0)
+                        tqdm.write(f"  最佳: BPM偏差={best_dev:.4f}mm, Score={best_score_so_far:.4f}")
+
+            except OptimizationError as e:
+                print(f"\n{e}")
+                self.rollback()
+                raise
             except Exception as e:
                 print(f"\n错误 (迭代 {i+1}): {e}")
                 continue

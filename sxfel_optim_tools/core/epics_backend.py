@@ -14,7 +14,34 @@
     # 之后调用 caget/caput 会自动路由到正确的后端
 """
 import threading
+import time
 from typing import Optional, List, Tuple
+
+
+# ============ EPICS 异常类 ============
+
+class EPICSError(Exception):
+    """EPICS 操作异常基类"""
+    pass
+
+class PVConnectionError(EPICSError):
+    """PV 连接失败"""
+    pass
+
+class PVTimeoutError(EPICSError):
+    """PV 操作超时"""
+    pass
+
+class PVWriteError(EPICSError):
+    """PV 写入失败"""
+    pass
+
+
+# ============ 重试机制参数 ============
+
+MAX_RETRIES = 5
+RETRY_DELAY_START = 1.0  # 秒
+RETRY_DELAY_INCREMENT = 1.0  # 每次增加的秒数
 
 
 class EPICSBackend:
@@ -80,8 +107,8 @@ class EPICSBackend:
             self._epics_module = epics
         return self._epics_module
 
-    def caget(self, pv: str, timeout: float = 1.0):
-        """读取 PV 值
+    def _caget_impl(self, pv: str, timeout: float = 1.0):
+        """caget 实现（不分派后端）
 
         Args:
             pv: PV 名称
@@ -96,6 +123,36 @@ class EPICSBackend:
             epics = self._get_epics()
             return epics.caget(pv, timeout=timeout)
 
+    def caget(self, pv: str, timeout: float = 1.0):
+        """读取 PV 值（带重试机制）
+
+        Args:
+            pv: PV 名称
+            timeout: 超时时间（秒）
+
+        Returns:
+            PV 值
+
+        Raises:
+            PVConnectionError: 连接失败或超时
+        """
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                value = self._caget_impl(pv, timeout)
+                if value is not None:
+                    return value
+                last_error = f"PV {pv} 返回 None"
+            except Exception as e:
+                last_error = f"PV {pv} 异常: {str(e)}"
+
+            if attempt < MAX_RETRIES - 1:
+                delay = RETRY_DELAY_START + attempt * RETRY_DELAY_INCREMENT
+                print(f"  警告: {last_error}，{delay:.1f}秒后重试...")
+                time.sleep(delay)
+
+        raise PVConnectionError(f"PV {pv} 连接失败，已重试 {MAX_RETRIES} 次: {last_error}")
+
     def caput(self, pv: str, value, wait: bool = False, timeout: float = 1.0) -> bool:
         """设置 PV 值
 
@@ -107,7 +164,22 @@ class EPICSBackend:
 
         Returns:
             成功返回 True，失败返回 False
+
+        Raises:
+            PVWriteError: 写入失败（仅在模拟器模式抛出）
         """
+        if self._use_simulator:
+            result = self._get_simulator().caput(pv, value, wait, timeout)
+            if not result:
+                raise PVWriteError(f"PV {pv} 写入失败")
+            return result
+        else:
+            epics = self._get_epics()
+            epics.caput(pv, value, wait=wait, timeout=timeout)
+            return True
+
+    def _caput_impl(self, pv: str, value, wait: bool = False, timeout: float = 1.0) -> bool:
+        """caput 实现（不分派后端）"""
         if self._use_simulator:
             return self._get_simulator().caput(pv, value, wait, timeout)
         else:
@@ -116,20 +188,24 @@ class EPICSBackend:
             return True
 
     def caget_many(self, pvs: List[str], timeout: float = 1.0) -> List:
-        """批量读取 PV 值
+        """批量读取 PV 值（带重试机制）
 
         Args:
             pvs: PV 名称列表
             timeout: 超时时间（秒）
 
         Returns:
-            PV 值列表
+            PV 值列表（包含 None 表示该 PV 读取失败）
         """
-        if self._use_simulator:
-            return self._get_simulator().caget_many(pvs, timeout)
-        else:
-            epics = self._get_epics()
-            return [epics.caget(pv, timeout=timeout) for pv in pvs]
+        results = []
+        for pv in pvs:
+            try:
+                value = self.caget(pv, timeout)
+                results.append(value)
+            except PVConnectionError:
+                # 连接失败时继续处理其他 PV
+                results.append(None)
+        return results
 
     def caput_many(self, pvs: List[str], values: List, wait: bool = False, timeout: float = 1.0) -> bool:
         """批量设置 PV 值

@@ -103,6 +103,19 @@ score = sqrt(sum((bpm_reading_i - target_i)^2))
 - `pv`: EPICS 过程变量地址
 - `range`: [最小值, 最大值] - 设备电流范围
 
+### 硬件参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `repetition_rate` | 束团重复频率（Hz），用于计算 BPM 采样间隔 | 10 |
+| `num_bpm_averages` | BPM 采样平均次数 | 5 |
+| `min_adjust_interval` | 校正子最小调整间隔（秒），硬件限制 | 6 |
+| `poll_interval` | 轮询间隔（秒） | 0.2 |
+| `tolerance` | 设定值容差 | 0.0001 |
+| `max_wait` | 最大等待时间（秒） | 10 |
+
+> **注意**：硬件参数通过 `objective.params` 配置。`min_adjust_interval` 是硬件限制，校正子调整后需等待至少指定秒数才能进行下一次调整。BPM 采样间隔为 `1/repetition_rate` 秒。
+
 ## 使用方法
 
 ### 全0轨道优化
@@ -152,22 +165,59 @@ if args.mode is not None:
 
 ```python
 def get_score(self, params, device_pvs):
-    # 设置校正子参数
+    # 1. 安全设置设备参数
     success = safe_device_operation(device_pvs, params, self.config)
     if not success:
         return float('inf')
 
-    time.sleep(0.5)  # 等待稳定
+    # 2. 检查硬件调整间隔（6秒限制）
+    elapsed = time.time() - self._last_adjust_time
+    if elapsed < self.min_adjust_interval:
+        wait_time = self.min_adjust_interval - elapsed
+        print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
+        time.sleep(wait_time)
 
-    # 获取BPM读数
+    # 3. 轮询等待所有元件达到设定值
+    from ..utils import wait_for_all_devices_settled
+    success, failed_devs = wait_for_all_devices_settled(
+        device_pvs, params,
+        tolerance=self.tolerance,
+        max_wait=self.max_wait,
+        poll_interval=self.poll_interval
+    )
+
+    if not success:
+        # 抛出异常，触发回滚
+        raise OptimizationError("元件写入失败")
+
+    self._last_adjust_time = time.time()
+
+    # 4. 获取BPM读数（多次采样平均）
     bpm_readings = self._get_bpm_readings()
 
-    # 计算与参考轨道的偏差
+    # 5. 计算与参考轨道的偏差
     ref_values = [self.reference_orbit.get(pv, 0.0) for pv in self.bpm_pvs]
     diff = np.array(bpm_readings) - np.array(ref_values)
     score = np.sqrt(np.sum(diff**2))
 
     return score
+```
+
+### BPM 采样逻辑
+
+```python
+def _get_bpm_readings(self):
+    """获取所有BPM的轨道读数（多次采样平均）"""
+    # 采样间隔 = 1/重复频率
+    sample_interval = 1.0 / self.repetition_rate
+
+    all_readings = []
+    for _ in range(self.num_bpm_averages):
+        readings = caget_many(self.bpm_pvs)
+        all_readings.append([r if r is not None else 0.0 for r in readings])
+        time.sleep(sample_interval)
+
+    return np.mean(all_readings, axis=0).tolist()
 ```
 
 ## 统一配置文件
