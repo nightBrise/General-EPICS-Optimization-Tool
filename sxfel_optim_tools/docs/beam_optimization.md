@@ -17,17 +17,35 @@
 ### 评分公式
 
 ```
-score = 0.4 * size_score + 0.4 * non_roundness_penalty + 0.2 * position_penalty
+score = w_size * size_score + w_roundness * non_roundness_penalty + w_position * position_penalty
 ```
 
-- `size_score`: 束流尺寸
-- `non_roundness_penalty`: 尺寸 * (1 - 圆度)
-- `position_penalty`: 位置偏移惩罚（仅当 `maintain_position: true` 时）
+| 分量 | 含义 |
+|------|------|
+| `size_score` | 束流尺寸评分（根据目标模式计算） |
+| `non_roundness_penalty` | 尺寸 × (1 - 圆度) |
+| `position_penalty` | 位置偏移惩罚 |
+| `w_*` | 各分量权重（由 `beam_mode` 控制） |
 
-当 `maintain_position: false` 时：
-```
-score = 0.5 * size_score + 0.5 * non_roundness_penalty
-```
+### 目标模式 (`target_mode`)
+
+| 模式 | size_score 计算方式 | 说明 |
+|------|---------------------|------|
+| `minimize`（默认） | `combined_size` | 最小化束流尺寸 |
+| `exact` | `(实际尺寸 - 目标尺寸)² / 目标尺寸²` | 优化到指定目标尺寸 |
+| `range` | 范围内为0，范围外惩罚 | 优化到指定尺寸范围内 |
+
+### 圆度模式 (`beam_mode`)
+
+| 模式 | w_size | w_roundness | w_position | 说明 |
+|------|--------|-------------|------------|------|
+| `size_focus` | 0.7 | 0.3 | 0.0 | 强尺寸优先 |
+| `balanced`（默认） | 0.5 | 0.4 | 0.1 | 平衡模式 |
+| `roundness_focus` | 0.3 | 0.6 | 0.1 | 强圆度优先 |
+
+### 位置维持
+
+`maintain_position` 默认为 `true`，优化过程中会维持束流位置不变。
 
 ## 配置参数
 
@@ -41,15 +59,18 @@ score = 0.5 * size_score + 0.5 * non_roundness_penalty
     "type": "beam_size",
     "read_pvs": ["LA-BI:PRF22:RAW:ArrayData"],
     "params": {
-      "shape": [1392, 1040],
+      "camera_shape": [1392, 1040],
       "num_averages": 3,
       "target_diagonal_size_pixels": 0,
+      "target_mode": "minimize",
+      "target_range": [0, 1000],
+      "beam_mode": "balanced",
       "maintain_position": true
     }
   },
   "camera": {
     "pv": "LA-BI:PRF22:RAW:ArrayData",
-    "shape": [1392, 1040],
+    "camera_shape": [1392, 1040],
     "gain_pv": "LA-BI:PRF22:CAM:GainRaw",
     "gain_range": [0, 500]
   },
@@ -73,18 +94,49 @@ score = 0.5 * size_score + 0.5 * non_roundness_penalty
 }
 ```
 
+### 不同模式配置示例
+
+**精确目标模式**（优化到指定尺寸）：
+```json
+{
+  "objective": {
+    "params": {
+      "target_mode": "exact",
+      "target_diagonal_size_pixels": 200,
+      "beam_mode": "balanced"
+    }
+  }
+}
+```
+
+**范围目标模式**（优化到尺寸范围内）：
+```json
+{
+  "objective": {
+    "params": {
+      "target_mode": "range",
+      "target_range": [150, 300],
+      "beam_mode": "roundness_focus"
+    }
+  }
+}
+```
+
 ### 字段说明
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
 | `objective.type` | 是 | 必须为 `beam_size` |
 | `objective.read_pvs` | 是 | 相机图像 PV 列表 |
-| `objective.params.shape` | 否 | 图像尺寸 [宽, 高]，默认 [1392, 1040] |
+| `objective.params.camera_shape` | 否 | 相机图像尺寸 [宽, 高]，默认 [1392, 1040] |
 | `objective.params.num_averages` | 否 | 平均帧数，默认 3 |
-| `objective.params.target_diagonal_size_pixels` | 否 | 目标尺寸，0 表示最小化 |
+| `objective.params.target_diagonal_size_pixels` | 否 | 目标尺寸，0 表示最小化（精确目标模式） |
+| `objective.params.target_mode` | 否 | 目标模式：`minimize`/`exact`/`range`，默认 `minimize` |
+| `objective.params.target_range` | 否 | 范围目标 [最小, 最大]，默认 [0, 1000] |
+| `objective.params.beam_mode` | 否 | 圆度模式：`size_focus`/`balanced`/`roundness_focus`，默认 `balanced` |
 | `objective.params.maintain_position` | 否 | 是否维持束流位置，默认 true |
 | `camera.pv` | 是 | 相机数据 PV 地址 |
-| `camera.shape` | 是 | 相机图像尺寸 |
+| `camera.camera_shape` | 是 | 相机图像尺寸 |
 | `camera.gain_pv` | 否 | 增益控制 PV |
 | `optimization.algorithm` | 否 | 算法，默认 Compass |
 | `optimization.budget` | 否 | 迭代次数，默认 50 |
@@ -157,8 +209,36 @@ python run_optimization.py --config config_beam.json --algorithm NGOpt
 
 优化完成后：
 1. 终端显示收敛曲线和最优参数
-2. 结果自动保存至 `results/beam_optimization_YYYYMMDD_HHMMSS.h5`
-3. 可视化图片保存为 `results/optimization_summary.png`
+2. 结果自动保存至 `results/beam_YYYYMMDD_HHMMSS.h5`
+3. 可视化图表保存为 `results/beam_optimization_plot.png`
+
+### 可视化结果
+
+使用交互式可视化工具查看详细结果：
+
+```bash
+python tools/plot_results.py
+```
+
+该工具会生成包含以下内容的图表：
+- **收敛曲线**：评分随迭代次数的变化
+- **束流尺寸变化**：size_x、size_y 及组合尺寸的演化
+- **尺寸分量与圆度**：双 Y 轴显示尺寸和圆度的关系
+- **质心轨迹**：束流中心在图像上的移动路径
+- **参数演化热图**：各磁铁/校正器参数的变化过程
+- **最优束流图像**：最佳迭代时的束流图像
+
+### 查看历史结果
+
+结果文件为 HDF5 格式（`.h5`），可通过以下方式加载：
+
+```python
+from core.results import load_beam
+
+history = load_beam('results/beam_20260402_120000.h5')
+print(history.keys())
+# ['device_pvs', 'device_names', 'iterations', 'best_params', 'best_score', ...]
+```
 
 ## 安全机制
 

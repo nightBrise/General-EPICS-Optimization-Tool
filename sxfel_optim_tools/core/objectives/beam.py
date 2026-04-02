@@ -20,6 +20,14 @@ from ..utils import (
 )
 
 
+# 束流优化模式权重配置
+BEAM_MODE_WEIGHTS = {
+    'size_focus':      {'size': 0.7, 'roundness': 0.3, 'position': 0.0},   # 强尺寸优先
+    'balanced':        {'size': 0.5, 'roundness': 0.4, 'position': 0.1},  # 平衡（默认）
+    'roundness_focus': {'size': 0.3, 'roundness': 0.6, 'position': 0.1},  # 强圆度优先
+}
+
+
 @register_objective("beam_size")
 class BeamObjective(BaseObjective):
     """束流尺寸优化目标函数
@@ -35,9 +43,21 @@ class BeamObjective(BaseObjective):
         """
         super().__init__(config)
         self.camera_config = config.get('camera', {})
+
+        # 从 camera.camera_shape 读取图像尺寸（兼容旧 shape 字段）
+        self.camera_shape = self.camera_config.get('camera_shape',
+                                                   self.camera_config.get('shape', [1392, 1040]))
+
         self.num_averages = self.params.get('num_averages', 3)
         self.target_diagonal_size = self.params.get('target_diagonal_size_pixels', 0)
-        self.maintain_position = self.params.get('maintain_position', False)
+        # 新增：目标模式（minimize/exact/range）
+        self.target_mode = self.params.get('target_mode', 'minimize')
+        # 新增：范围目标 [min, max]
+        self.target_range = self.params.get('target_range', [0, float('inf')])
+        # 新增：圆度优化模式
+        self.beam_mode = self.params.get('beam_mode', 'balanced')
+        # 位置维持默认为 true
+        self.maintain_position = self.params.get('maintain_position', True)
 
         # 参数配置
         self.repetition_rate = self.params.get('repetition_rate', 10)
@@ -122,26 +142,49 @@ class BeamObjective(BaseObjective):
             'centroid_y': centroid_y
         }
 
-        # 计算评分
-        size_score = combined_size
+        # 获取模式权重
+        w = BEAM_MODE_WEIGHTS.get(self.beam_mode, BEAM_MODE_WEIGHTS['balanced'])
+
+        # 计算尺寸评分
+        if self.target_mode == 'exact' and self.target_diagonal_size > 0:
+            # 精确目标模式
+            relative_error = (combined_size - self.target_diagonal_size) / self.target_diagonal_size
+            size_score = relative_error ** 2
+        elif self.target_mode == 'range':
+            # 范围目标模式
+            target_min, target_max = self.target_range
+            if target_min <= combined_size <= target_max:
+                size_score = 0.0
+            else:
+                if combined_size < target_min:
+                    deviation = target_min - combined_size
+                else:
+                    deviation = combined_size - target_max
+                size_score = deviation / max(target_max - target_min, 1)
+        else:
+            # 默认最小化模式
+            size_score = combined_size
+
+        # 圆度惩罚
         non_roundness_penalty = combined_size * (1 - roundness)
 
+        # 位置惩罚（默认启用）
         position_penalty = 0.0
         if self.maintain_position:
             dx = centroid_x - self.initial_centroid_x
             dy = centroid_y - self.initial_centroid_y
             distance = np.sqrt(dx**2 + dy**2)
-            img_width, img_height = self.camera_config.get('shape', [1392, 1040])
+            img_width, img_height = self.camera_shape
             img_diagonal = np.sqrt(img_width**2 + img_height**2)
             normalized_distance = distance / img_diagonal
             position_penalty = combined_size * normalized_distance * 100
             current_metrics['position_distance'] = distance
             current_metrics['normalized_distance'] = normalized_distance
 
-        if self.maintain_position:
-            score = 0.4 * size_score + 0.4 * non_roundness_penalty + 0.2 * position_penalty
-        else:
-            score = 0.5 * size_score + 0.5 * non_roundness_penalty
+        # 综合评分
+        score = (w['size'] * size_score
+                 + w['roundness'] * non_roundness_penalty
+                 + w['position'] * position_penalty)
 
         metrics.update(current_metrics, score)
 
@@ -153,7 +196,7 @@ class BeamObjective(BaseObjective):
         valid_count = 0
 
         camera_pv = self.camera_config.get('pv', 'LA-BI:PRF22:RAW:ArrayData')
-        shape = self.camera_config.get('shape', [1392, 1040])
+        shape = self.camera_shape
 
         for _ in range(self.num_averages):
             img = get_image_from_YAG(camera_pv, shape)
@@ -253,13 +296,17 @@ def objective_function(params_dict, device_pvs, config):
     time.sleep(2)
 
     camera_config = config['camera']
+    camera_shape = camera_config.get('camera_shape', camera_config.get('shape', [1392, 1040]))
     num_averages = config.get('image_processing', {}).get('num_averages', 3)
     target_diagonal_size = config.get('target_diagonal_size_pixels', 0)
-    maintain_position = config.get('maintain_position', False)
+    target_mode = config.get('target_mode', 'minimize')
+    target_range = config.get('target_range', [0, float('inf')])
+    beam_mode = config.get('beam_mode', 'balanced')
+    maintain_position = config.get('maintain_position', True)
 
     raw_image, size_x, size_y, centroid_x, centroid_y, combined_size, roundness = get_average_YAG_image(
         camera_config['pv'],
-        camera_config['shape'],
+        camera_shape,
         num_reads=num_averages,
     )
 
@@ -281,9 +328,23 @@ def objective_function(params_dict, device_pvs, config):
         'centroid_y': centroid_y
     }
 
-    if target_diagonal_size > 0:
+    # 获取模式权重
+    w = BEAM_MODE_WEIGHTS.get(beam_mode, BEAM_MODE_WEIGHTS['balanced'])
+
+    # 计算尺寸评分
+    if target_mode == 'exact' and target_diagonal_size > 0:
         relative_error = (combined_size - target_diagonal_size) / target_diagonal_size
         size_score = relative_error ** 2
+    elif target_mode == 'range':
+        target_min, target_max = target_range
+        if target_min <= combined_size <= target_max:
+            size_score = 0.0
+        else:
+            if combined_size < target_min:
+                deviation = target_min - combined_size
+            else:
+                deviation = combined_size - target_max
+            size_score = deviation / max(target_max - target_min, 1)
     else:
         size_score = combined_size
 
@@ -294,17 +355,17 @@ def objective_function(params_dict, device_pvs, config):
         dx = centroid_x - objective_function.initial_centroid_x
         dy = centroid_y - objective_function.initial_centroid_y
         distance = np.sqrt(dx**2 + dy**2)
-        img_width, img_height = camera_config['shape']
+        img_width, img_height = camera_shape
         img_diagonal = np.sqrt(img_width**2 + img_height**2)
         normalized_distance = distance / img_diagonal
         position_penalty = combined_size * normalized_distance * 100
         current_metrics['position_distance'] = distance
         current_metrics['normalized_distance'] = normalized_distance
 
-    if maintain_position:
-        score = 0.4 * size_score + 0.4 * non_roundness_penalty + 0.2 * position_penalty
-    else:
-        score = 0.5 * size_score + 0.5 * non_roundness_penalty
+    # 综合评分
+    score = (w['size'] * size_score
+             + w['roundness'] * non_roundness_penalty
+             + w['position'] * position_penalty)
 
     metrics.update(current_metrics, score)
 

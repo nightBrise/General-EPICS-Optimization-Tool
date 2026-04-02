@@ -31,6 +31,24 @@ python run_optimization.py --config config_orbit.json --mode ref --budget 50
 | 束流尺寸优化 | 最小化束斑同时优化圆度 | [docs/beam_optimization.md](docs/beam_optimization.md) |
 | 轨道优化 | 调整校正子使 BPM 接近零或参考轨道 | [docs/orbit_optimization.md](docs/orbit_optimization.md) |
 
+## 结果可视化
+
+优化完成后，结果自动保存为 HDF5 格式（`results/beam_YYYYMMDD_HHMMSS.h5` 或 `results/orbit_YYYYMMDD_HHMMSS.h5`）。
+
+使用可视化工具查看结果：
+
+```bash
+# 交互式选择文件并可视化
+python tools/plot_results.py
+```
+
+可视化工具会自动生成包含以下内容的图表：
+- **收敛曲线**：评分随迭代次数的变化
+- **束流尺寸/轨道偏差变化**：优化过程中各指标的变化
+- **质心轨迹/轨道轮廓**：束流位置或轨道分布的变化
+- **参数演化热图**：各设备参数在优化过程中的变化
+- **最优图像对比**：初始与最优状态的束流图像对比
+
 ## 模拟器与真实 EPICS
 
 默认使用**真实 EPICS** 模式。添加 `--simulator` 参数切换到模拟器模式（无需连接真实设备）：

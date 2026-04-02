@@ -35,16 +35,21 @@ def print_beam_optimization_info(config, args):
     camera = config.get('camera', {})
     print(f"\n相机配置:")
     print(f"  图像 PV: {camera.get('pv', 'N/A')}")
-    shape = camera.get('shape', ['N/A', 'N/A'])
-    print(f"  图像尺寸: {shape[0]} x {shape[1]}")
+    camera_shape = camera.get('camera_shape', camera.get('shape', ['N/A', 'N/A']))
+    print(f"  图像尺寸: {camera_shape[0]} x {camera_shape[1]}")
     print(f"  增益 PV: {camera.get('gain_pv', 'N/A')}")
 
     # 图像处理参数
     obj_params = config.get('objective', {}).get('params', {})
     print(f"\n图像处理:")
     print(f"  平均次数: {obj_params.get('num_averages', 3)}")
-    print(f"  目标对角线尺寸: {obj_params.get('target_diagonal_size_pixels', 0)} 像素")
-    print(f"  位置维持模式: {'开启' if obj_params.get('maintain_position', False) else '关闭'}")
+    print(f"  目标尺寸模式: {obj_params.get('target_mode', 'minimize')}")
+    if obj_params.get('target_mode') == 'exact':
+        print(f"  目标对角线尺寸: {obj_params.get('target_diagonal_size_pixels', 0)} 像素")
+    elif obj_params.get('target_mode') == 'range':
+        print(f"  目标尺寸范围: {obj_params.get('target_range', [0, 1000])} 像素")
+    print(f"  圆度模式: {obj_params.get('beam_mode', 'balanced')}")
+    print(f"  位置维持模式: {'开启' if obj_params.get('maintain_position', True) else '关闭'}")
 
     # 算法信息
     algorithm = args.algorithm or config.get('optimization', {}).get('algorithm', 'NGOpt')

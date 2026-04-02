@@ -271,3 +271,32 @@ def _get_bpm_readings(self):
 - **参数边界限制**: 所有校正子电流限制在配置范围内
 - **读回验证**: 设置后验证实际值
 - **早停机制**: 无显著改进时自动停止
+
+## 结果可视化
+
+优化完成后，结果自动保存为 HDF5 格式（`results/orbit_YYYYMMDD_HHMMSS.h5`）。
+
+使用交互式可视化工具查看详细结果：
+
+```bash
+python tools/plot_results.py
+```
+
+该工具会生成包含以下内容的图表：
+- **收敛曲线**：评分随迭代次数的变化
+- **RMS 偏差变化**：轨道偏差均方根的演化
+- **轨道轮廓**：X/Y 方向轨道位置的初始、最优和参考值对比
+- **校正器参数演化**：各校正器磁铁参数的变化过程
+- **BPM 偏差变化**：各 BPM 读数偏差的迭代变化
+
+### 查看历史结果
+
+结果文件为 HDF5 格式（`.h5`），可通过以下方式加载：
+
+```python
+from core.results import load_orbit
+
+history, orbit_mode = load_orbit('results/orbit_20260402_120000.h5')
+print(history.keys())
+# ['device_pvs', 'bpm_names', 'iterations', 'best_params', 'best_score', ...]
+```

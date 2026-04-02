@@ -5,9 +5,12 @@
     "type": "beam_size",
     "read_pvs": ["LA-BI:PRF22:RAW:ArrayData"],
     "params": {
-      "shape": [1392, 1040],
+      "camera_shape": [1392, 1040],
       "num_averages": 3,
       "target_diagonal_size_pixels": 0,
+      "target_mode": "minimize",
+      "target_range": [0, 1000],
+      "beam_mode": "balanced",
       "maintain_position": true,
       "repetition_rate": 10,
       "min_adjust_interval": 6,
@@ -18,7 +21,7 @@
   },
   "camera": {
     "pv": "LA-BI:PRF22:RAW:ArrayData",
-    "shape": [1392, 1040],
+    "camera_shape": [1392, 1040],
     "gain_pv": "LA-BI:PRF22:CAM:GainRaw",
     "gain_range": [0, 500]
   },
@@ -40,8 +43,6 @@
       "// step_size: 0.5          // OnePlusOne 等": ""
     }
   },
-  "target_diagonal_size_pixels": 0,
-  "maintain_position": true,
   "devices": {
     "quadrupoles": [
       {
