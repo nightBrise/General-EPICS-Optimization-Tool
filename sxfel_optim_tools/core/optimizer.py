@@ -70,10 +70,9 @@ class Optimizer:
             num_workers=1
         )
 
-        # 优化历史
+        # 优化历史 - 保存完整PV名称，device_names在加载时统一处理
         optimization_history = {
             'device_pvs': device_pvs.copy(),
-            'device_names': [pv.split(':')[-1] for pv in device_pvs],
             'iterations': [],
             'algorithm': algorithm,
             'budget': budget,
@@ -94,8 +93,32 @@ class Optimizer:
 
         iteration_history = {
             'parameters': [current_values.copy()],
-            'scores': [initial_score]
+            'scores': [initial_score],
+            'size_x': [],
+            'size_y': [],
+            'roundness': [],
+            'centroid_x': [],
+            'centroid_y': [],
+            'physical_sizes': [],
+            'images': [],
+            'bpm_readings': [],
+            'deviations': []
         }
+
+        # 获取初始指标数据（根据目标类型不同，包含束斑或轨道数据）
+        from .objectives.metrics import metrics
+        initial_metrics = metrics.get_current()
+        # 束流指标
+        iteration_history['size_x'].append(initial_metrics.get('size_x', 0))
+        iteration_history['size_y'].append(initial_metrics.get('size_y', 0))
+        iteration_history['roundness'].append(initial_metrics.get('roundness', 0))
+        iteration_history['centroid_x'].append(initial_metrics.get('centroid_x', 0))
+        iteration_history['centroid_y'].append(initial_metrics.get('centroid_y', 0))
+        iteration_history['physical_sizes'].append(initial_metrics.get('physical_size', 0))
+        iteration_history['images'].append(initial_metrics.get('image'))
+        # 轨道指标
+        iteration_history['bpm_readings'].append(initial_metrics.get('bpm_readings', []))
+        iteration_history['deviations'].append(initial_metrics.get('deviations', []))
 
         print(f"初始评分: {initial_score:.4f}")
 
@@ -121,9 +144,21 @@ class Optimizer:
                 # 告知优化器
                 optimizer.tell(candidate, value)
 
+                # 获取当前指标
+                current_metrics = metrics.get_current()
+
                 # 记录历史
                 iteration_history['parameters'].append(params.copy())
                 iteration_history['scores'].append(value)
+                iteration_history['size_x'].append(current_metrics.get('size_x', 0))
+                iteration_history['size_y'].append(current_metrics.get('size_y', 0))
+                iteration_history['roundness'].append(current_metrics.get('roundness', 0))
+                iteration_history['centroid_x'].append(current_metrics.get('centroid_x', 0))
+                iteration_history['centroid_y'].append(current_metrics.get('centroid_y', 0))
+                iteration_history['physical_sizes'].append(current_metrics.get('physical_size', 0))
+                iteration_history['images'].append(current_metrics.get('image'))
+                iteration_history['bpm_readings'].append(current_metrics.get('bpm_readings', []))
+                iteration_history['deviations'].append(current_metrics.get('deviations', []))
                 optimization_history['iterations'].append(i + 1)
 
                 # 早停检查
@@ -178,6 +213,15 @@ class Optimizer:
         optimization_history['iteration_history'] = iteration_history
         optimization_history['best_params'] = best_params.copy()
         optimization_history['best_score'] = best_score
+
+        # 计算最佳评分的索引
+        valid_scores = [(j, s) for j, s in enumerate(iteration_history['scores'])
+                       if not np.isinf(s) and not np.isnan(s)]
+        if valid_scores:
+            best_idx, _ = min(valid_scores, key=lambda x: x[1])
+        else:
+            best_idx = 0
+        optimization_history['best_iteration_index'] = best_idx
 
         # 获取当前指标
         current_metrics = metrics.get_current()

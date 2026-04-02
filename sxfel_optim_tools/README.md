@@ -1,5 +1,5 @@
 # SXFEL 优化工具箱
-![version](https://img.shields.io/badge/version-v2.0-brightgreen)
+![version](https://img.shields.io/badge/version-v2.2-brightgreen)
 
 通用加速器优化框架，支持束流尺寸优化、轨道优化等多种优化任务。
 
@@ -13,8 +13,10 @@ sxfel_optim_tools/
 ├── core/                   # 核心模块
 │   ├── objectives/         # 目标函数
 │   ├── optimizer.py       # 优化器
-│   └── simulator.py       # EPICS 模拟器
+│   ├── simulator.py       # EPICS 模拟器
+│   └── results.py         # 结果保存/加载
 ├── tools/                  # 辅助工具
+│   └── plot_results.py    # 结果可视化
 ├── docs/                   # 详细文档
 └── results/               # 结果目录
 ```
@@ -161,7 +163,7 @@ python run_optimization.py --config config_beam.json --algorithm NGOpt
 | `core/objectives/` | 目标函数实现和注册机制 |
 | `core/optimizer.py` | Nevergrad 优化器封装 |
 | `core/simulator.py` | EPICS PV 模拟器（用于测试） |
-| `tools/visualize.py` | 结果可视化 |
+| `tools/plot_results.py` | 优化结果可视化（束流/轨道） |
 
 ## 依赖安装
 
@@ -172,4 +174,4 @@ pip install -r requirements.txt
 ## 支持
 
 - 常规问题: zhangny@sari.ac.cn, zhangbw@sari.ac.cn
-- 版本: 2.0
+- 版本: 2.2

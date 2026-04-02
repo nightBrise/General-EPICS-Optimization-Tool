@@ -191,30 +191,34 @@ def plot_beam_results(history, output_path=None):
     valid_cy = np.array(padded_cy)[valid_mask]
 
     if len(valid_cx) > 0 and len(valid_cy) > 0 and len(valid_cx) == len(valid_cy):
-        # 颜色渐变：冷色到暖色
-        colors = plt.cm.viridis(np.linspace(0, 1, len(valid_cx)))
-        for i in range(len(valid_cx) - 1):
-            ax4.plot(valid_cx[i:i+2], valid_cy[i:i+2],
-                    color=colors[i], linewidth=2)
-        ax4.scatter(valid_cx[0], valid_cy[0], color='green',
-                   s=200, marker='*', zorder=5, label='Start')
-        if len(valid_cx) > 1:
-            ax4.scatter(valid_cx[-1], valid_cy[-1], color='red',
-                       s=200, marker='*', zorder=5, label='End')
+        # 颜色渐变：冷色到暖色表示迭代顺序
+        scatter = ax4.scatter(valid_cx, valid_cy, c=range(len(valid_cx)),
+                            cmap='viridis', s=50, zorder=3)
+        # 添加颜色条表示迭代顺序
+        plt.colorbar(scatter, ax=ax4, label='Iteration')
+
+        # 设置相等的坐标范围和比例尺
+        all_coords = np.concatenate([valid_cx, valid_cy])
+        data_min = np.min(all_coords)
+        data_max = np.max(all_coords)
+        margin = (data_max - data_min) * 0.1
+        ax4.set_xlim(data_min - margin, data_max + margin)
+        ax4.set_ylim(data_min - margin, data_max + margin)
 
     ax4.set_xlabel('Centroid X')
     ax4.set_ylabel('Centroid Y')
     ax4.set_title('Centroid Trajectory')
-    ax4.legend()
     ax4.grid(True, alpha=0.3)
     ax4.set_aspect('equal', adjustable='box')
 
-    # 5. 校正器参数变化热图 + 最优参数表
+    # 5. 校正器参数变化热图
     ax5 = fig.add_subplot(2, 3, 5)
-    params_array = np.array(iter_history.get('parameters', [[]])).T if iter_history.get('parameters') else np.array([])
-
-    if params_array.size > 0:
+    params_list = iter_history.get('parameters', [])
+    if params_list and len(params_list) > 0:
+        params_array = np.array(params_list).T  # 转置：行=设备, 列=迭代
         num_its = params_array.shape[1]
+        device_names = history.get('device_names', [])
+
         im = ax5.imshow(params_array, aspect='auto', cmap='viridis',
                        extent=[1, num_its, -0.5, params_array.shape[0]-0.5])
         ax5.set_xlabel('Iteration')
@@ -222,13 +226,18 @@ def plot_beam_results(history, output_path=None):
         ax5.set_title('Parameter Evolution')
         plt.colorbar(im, ax=ax5, label='Value')
 
-        # 设置Y轴标签
-        device_names = history.get('device_names', [])
+        # 添加数值标注
+        for i in range(params_array.shape[0]):
+            for j in range(params_array.shape[1]):
+                value = params_array[i, j]
+                text_color = 'white' if j < num_its // 2 else 'black'
+                ax5.text(j + 0.5, i + 0.5, f'{value:.1f}',
+                        ha='center', va='center', fontsize=5, color=text_color)
+
         if len(device_names) == params_array.shape[0]:
             ax5.set_yticks(range(len(device_names)))
             ax5.set_yticklabels(device_names, fontsize=8)
 
-        # 在热图上标注最佳迭代
         ax5.axvline(x=best_iter, color='red', linestyle='--', linewidth=2)
 
     # 6. 初始/最优图像对比
@@ -330,18 +339,18 @@ def plot_orbit_results(history, orbit_mode, output_path=None):
         # 初始轨道 X
         if len(bpm_readings[0]) >= len(bpm_x_indices):
             initial_x = [bpm_readings[0][i] for i in bpm_x_indices]
-            ax3.plot(list(bpm_x_indices), initial_x, 'b--', linewidth=2, label='Initial')
+            ax3.plot(list(bpm_x_indices), initial_x, 'b--', linewidth=2, marker='o', markersize=5, label='Initial')
 
         # 最优轨道 X
         if best_idx < len(bpm_readings) and len(bpm_readings[best_idx]) >= len(bpm_x_indices):
             best_x = [bpm_readings[best_idx][i] for i in bpm_x_indices]
-            ax3.plot(list(bpm_x_indices), best_x, 'g-', linewidth=2, label='Best')
+            ax3.plot(list(bpm_x_indices), best_x, 'g-', linewidth=2, marker='o', markersize=5, label='Best')
 
         # 参考轨道 X (仅ref模式)
         if orbit_mode == 'ref':
             ref_orbit = history.get('reference_orbit', {})
             ref_x = [ref_orbit.get(history['bpm_pvs'][i], 0) for i in bpm_x_indices]
-            ax3.plot(list(bpm_x_indices), ref_x, 'orange', linestyle=':', linewidth=2, label='Reference')
+            ax3.plot(list(bpm_x_indices), ref_x, 'orange', linestyle=':', linewidth=2, marker='o', markersize=5, label='Reference')
 
     ax3.set_xlabel('BPM Index')
     ax3.set_ylabel('X Position')
@@ -356,16 +365,16 @@ def plot_orbit_results(history, orbit_mode, output_path=None):
     if bpm_readings and len(bpm_readings) > 0:
         if len(bpm_readings[0]) >= len(bpm_y_indices):
             initial_y = [bpm_readings[0][i] for i in bpm_y_indices]
-            ax4.plot(list(bpm_y_indices), initial_y, 'b--', linewidth=2, label='Initial')
+            ax4.plot(list(bpm_y_indices), initial_y, 'b--', linewidth=2, marker='o', markersize=5, label='Initial')
 
         if best_idx < len(bpm_readings) and len(bpm_readings[best_idx]) >= len(bpm_y_indices):
             best_y = [bpm_readings[best_idx][i] for i in bpm_y_indices]
-            ax4.plot(list(bpm_y_indices), best_y, 'g-', linewidth=2, label='Best')
+            ax4.plot(list(bpm_y_indices), best_y, 'g-', linewidth=2, marker='o', markersize=5, label='Best')
 
         if orbit_mode == 'ref':
             ref_orbit = history.get('reference_orbit', {})
             ref_y = [ref_orbit.get(history['bpm_pvs'][i], 0) for i in bpm_y_indices]
-            ax4.plot(list(bpm_y_indices), ref_y, 'orange', linestyle=':', linewidth=2, label='Reference')
+            ax4.plot(list(bpm_y_indices), ref_y, 'orange', linestyle=':', linewidth=2, marker='o', markersize=5, label='Reference')
 
     ax4.set_xlabel('BPM Index')
     ax4.set_ylabel('Y Position')
@@ -375,45 +384,52 @@ def plot_orbit_results(history, orbit_mode, output_path=None):
 
     # 5. 校正器参数变化热图
     ax5 = fig.add_subplot(2, 3, 5)
-    params_array = np.array(iter_history.get('parameters', [[]])).T if iter_history.get('parameters') else np.array([])
-
-    if params_array.size > 0:
+    params_list = iter_history.get('parameters', [])
+    if params_list and len(params_list) > 0:
+        params_array = np.array(params_list).T  # 转置：行=校正器, 列=迭代
         num_its = params_array.shape[1]
+        device_names = history.get('device_names', [])
+
         im = ax5.imshow(params_array, aspect='auto', cmap='viridis',
-                       extent=[1, num_its, -0.5, params_array.shape[0]-0.5])
+                        extent=[1, num_its, -0.5, params_array.shape[0]-0.5])
         ax5.set_xlabel('Iteration')
         ax5.set_ylabel('Corrector')
         ax5.set_title('Corrector Parameter Evolution')
         plt.colorbar(im, ax=ax5, label='Value')
 
-        device_names = history.get('device_names', [])
+        # 添加数值标注
+        for i in range(params_array.shape[0]):
+            for j in range(params_array.shape[1]):
+                value = params_array[i, j]
+                text_color = 'white' if j < num_its // 2 else 'black'
+                ax5.text(j + 0.5, i + 0.5, f'{value:.1f}',
+                        ha='center', va='center', fontsize=5, color=text_color)
+
         if len(device_names) == params_array.shape[0]:
             ax5.set_yticks(range(len(device_names)))
             ax5.set_yticklabels(device_names, fontsize=8)
 
         ax5.axvline(x=best_iter, color='red', linestyle='--', linewidth=2)
 
-    # 6. BPM偏差热图
+    # 6. BPM偏差变化折线图
     ax6 = fig.add_subplot(2, 3, 6)
 
     if deviations_list and len(deviations_list) > 0:
-        # 转置：行为迭代，列为BPM
         deviations_array = np.array(deviations_list)
         if deviations_array.size > 0:
-            im = ax6.imshow(deviations_array.T, aspect='auto', cmap='RdBu_r',
-                           extent=[1, deviations_array.shape[0], -0.5, deviations_array.shape[1]-0.5],
-                           vmin=-np.max(np.abs(deviations_array)),
-                           vmax=np.max(np.abs(deviations_array)))
+            num_iters = deviations_array.shape[0]
+            num_bpms = deviations_array.shape[1] if deviations_array.ndim > 1 else 1
+            bpm_names_short = [n[:10] for n in bpm_names]
+
+            for i in range(num_bpms):
+                label = bpm_names_short[i] if i < len(bpm_names_short) else f'BPM {i}'
+                ax6.plot(range(1, num_iters + 1), deviations_array[:, i], linewidth=1, label=label)
+
             ax6.set_xlabel('Iteration')
-            ax6.set_ylabel('BPM')
-            ax6.set_title('BPM Deviation Heatmap')
-            plt.colorbar(im, ax=ax6, label='Deviation')
-
-            bpm_names_short = [n[:10] for n in bpm_names]  # 缩短名称
-            if len(bpm_names_short) == deviations_array.shape[1]:
-                ax6.set_yticks(range(len(bpm_names_short)))
-                ax6.set_yticklabels(bpm_names_short, fontsize=7)
-
+            ax6.set_ylabel('Deviation')
+            ax6.set_title('BPM Deviation Evolution')
+            ax6.legend(loc='upper right', fontsize=6, ncol=2)
+            ax6.grid(True, alpha=0.3)
             ax6.axvline(x=best_iter, color='red', linestyle='--', linewidth=2)
 
     plt.tight_layout()

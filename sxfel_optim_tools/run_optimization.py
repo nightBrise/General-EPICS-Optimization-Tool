@@ -15,7 +15,7 @@ import time
 from core.utils import load_config
 from core.objectives.registry import create_objective
 from core.optimizer import Optimizer
-from tools.visualize import plot_optimization_summary
+from tools.plot_results import plot_beam_results, plot_orbit_results
 
 
 def main():
@@ -124,7 +124,12 @@ def main():
         print(f"结果已保存至: {result_file}")
 
         # 保存可视化图片
-        plot_optimization_summary(history)
+        if obj_type == 'beam_size':
+            plot_beam_results(history)
+        elif obj_type in ['orbit', 'orbit_zero', 'orbit_ref']:
+            reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
+            orbit_mode = 'ref' if reference_orbit else 'zero'
+            plot_orbit_results(history, orbit_mode)
 
     except KeyboardInterrupt:
         print("\n\n用户中断优化")

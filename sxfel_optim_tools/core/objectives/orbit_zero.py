@@ -93,7 +93,10 @@ class OrbitObjective(BaseObjective):
             str: 保存的文件路径
         """
         from ..results import save_orbit
-        return save_orbit(history, config, results_dir, orbit_mode='zero')
+        # 根据是否有参考轨道决定模式
+        reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
+        orbit_mode = 'ref' if reference_orbit else 'zero'
+        return save_orbit(history, config, results_dir, orbit_mode=orbit_mode)
 
 
 # 兼容旧名称

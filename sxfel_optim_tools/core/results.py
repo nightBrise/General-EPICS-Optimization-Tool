@@ -37,20 +37,9 @@ def save_beam(history, config, results_dir='results'):
         # ========== devices ==========
         devices = f.create_group('devices')
         device_pvs = history.get('device_pvs', [])
-        device_names = history.get('device_names', [pv.split(':')[-1] for pv in device_pvs])
 
         devices.create_dataset('all_device_pvs', data=np.array(device_pvs, dtype='S'))
-        devices.create_dataset('all_device_names', data=np.array(device_names, dtype='S'))
-
-        # 从配置中提取各类设备
-        if 'devices' in config:
-            for dev_type, dev_list in config['devices'].items():
-                if isinstance(dev_list, list):
-                    pvs = [d.get('pv', '') for d in dev_list if isinstance(d, dict)]
-                    names = [pv.split(':')[-1] if pv else f"{dev_type}_{i}"
-                             for i, pv in enumerate(pvs)]
-                    devices.create_dataset(f'{dev_type}_pvs', data=np.array(pvs, dtype='S'))
-                    devices.create_dataset(f'{dev_type}_names', data=np.array(names, dtype='S'))
+        # device_names 在加载时统一从 device_pvs 提取，保存时只存 PV
 
         # ========== config ==========
         cfg = f.create_group('config')
@@ -170,17 +159,15 @@ def save_orbit(history, config, results_dir='results', orbit_mode='zero'):
         # ========== devices ==========
         devices = f.create_group('devices')
         device_pvs = history.get('device_pvs', [])
-        device_names = history.get('device_names', [pv.split(':')[-1] for pv in device_pvs])
         devices.create_dataset('corrector_pvs', data=np.array(device_pvs, dtype='S'))
-        devices.create_dataset('corrector_names', data=np.array(device_names, dtype='S'))
+        # corrector_names 在加载时从 corrector_pvs 提取
 
         # ========== bpm ==========
         bpm_group = f.create_group('bpm')
         objective_config = config.get('objective', {})
         bpm_pvs = objective_config.get('read_pvs', config.get('bpm_pvs', []))
-        bpm_names = [pv.split(':')[-1] if pv else f"BPM{i}" for i, pv in enumerate(bpm_pvs)]
         bpm_group.create_dataset('bpm_pvs', data=np.array(bpm_pvs, dtype='S'))
-        bpm_group.create_dataset('bpm_names', data=np.array(bpm_names, dtype='S'))
+        # bpm_names 在加载时从 bpm_pvs 提取
         bpm_group.attrs['num_bpms'] = len(bpm_pvs)
 
         # ========== reference_orbit ==========
@@ -284,10 +271,11 @@ def load_beam(filepath):
         history['early_stop'] = bool(metadata.attrs.get('early_stop', False))
         history['stop_iteration'] = int(metadata.attrs.get('stop_iteration', 0))
 
-        # devices
+        # devices - device_names 从 device_pvs 统一提取
         devices = f['devices']
         history['device_pvs'] = [pv.decode() for pv in devices['all_device_pvs'][:]]
-        history['device_names'] = [n.decode() for n in devices['all_device_names'][:]]
+        # 设备名从 PV 的第二段提取（如 Q34, CH20, KLY1），用于绘图显示
+        history['device_names'] = [pv.split(':')[1] for pv in history['device_pvs']]
 
         # config
         cfg = f['config']
@@ -371,15 +359,15 @@ def load_orbit(filepath):
         history['stop_iteration'] = int(metadata.attrs.get('stop_iteration', 0))
         orbit_mode = metadata.attrs.get('orbit_mode', 'zero')
 
-        # devices
+        # devices - device_names 从 device_pvs 统一提取
         devices = f['devices']
         history['device_pvs'] = [pv.decode() for pv in devices['corrector_pvs'][:]]
-        history['device_names'] = [n.decode() for n in devices['corrector_names'][:]]
+        history['device_names'] = [pv.split(':')[1] for pv in history['device_pvs']]
 
-        # bpm
+        # bpm - bpm_names 从 bpm_pvs 统一提取
         bpm_group = f['bpm']
         history['bpm_pvs'] = [pv.decode() for pv in bpm_group['bpm_pvs'][:]]
-        history['bpm_names'] = [n.decode() for n in bpm_group['bpm_names'][:]]
+        history['bpm_names'] = [pv.split(':')[1] for pv in history['bpm_pvs']]
         history['num_bpms'] = bpm_group.attrs.get('num_bpms', 0)
 
         # reference_orbit

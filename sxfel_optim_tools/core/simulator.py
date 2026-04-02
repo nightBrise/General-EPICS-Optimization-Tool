@@ -114,21 +114,23 @@ class SimpleEPICSSimulator:
         cv_avg = np.mean(cv_values) if cv_values else 0.0
 
         # 计算光斑中心位置（受校正器影响）
-        x_center = width // 2 + int(ch_avg * width * 0.1)  # CH影响水平位置
-        y_center = height // 2 + int(cv_avg * height * 0.1)  # CV影响垂直位置
+        # 使用更敏感的系数，让变化更明显
+        x_center = width // 2 + int(ch_avg * width * 0.8)  # CH影响水平位置
+        y_center = height // 2 + int(cv_avg * height * 0.8)  # CV影响垂直位置
 
         # 限制中心位置在图像内
         margin = min(width, height) // 10
         x_center = np.clip(x_center, margin, width - margin)
         y_center = np.clip(y_center, margin, height - margin)
 
-        # 四极磁铁影响束流尺寸
-        sigma_base = min(width, height) * 0.06
-        sigma_x = sigma_base * (1 - q_avg * 0.3)  # Q平均值影响水平尺寸
-        sigma_y = sigma_base * (1 - q_avg * 0.3)  # Q平均值影响垂直尺寸
+        # 四极磁铁影响束流尺寸 - 使用更大的系数让变化更明显
+        sigma_base = min(width, height) * 0.08  # 基础尺寸
+        # Q值范围大约是 [-1, 1]，所以 sigma 范围是 [sigma_base*0.5, sigma_base*1.5]
+        sigma_x = sigma_base * (1.0 - q_avg * 0.5)
+        sigma_y = sigma_base * (1.0 + q_avg * 0.5)
 
-        # 随机光斑强度
-        intensity = np.random.uniform(3000, 6000)
+        # 固定强度，减小随机性
+        intensity = 5000.0
 
         # 生成网格
         y, x = np.ogrid[:height, :width]
@@ -137,26 +139,16 @@ class SimpleEPICSSimulator:
         gaussian = np.exp(-0.5 * ((x - x_center)**2 / sigma_x**2 + (y - y_center)**2 / sigma_y**2))
         img = gaussian * intensity
 
-        # 添加少量旋转效果
-        if abs(q_avg) > 0.2:
-            rotation_angle = q_avg * 0.1  # 弧度
+        # 添加少量旋转效果（当Q值较大时）
+        if abs(q_avg) > 0.3:
+            rotation_angle = q_avg * 0.15
             x_rot = (x - x_center) * np.cos(rotation_angle) - (y - y_center) * np.sin(rotation_angle) + x_center
             y_rot = (x - x_center) * np.sin(rotation_angle) + (y - y_center) * np.cos(rotation_angle) + y_center
             gaussian_rot = np.exp(-0.5 * ((x_rot - x_center)**2 / sigma_x**2 + (y_rot - y_center)**2 / sigma_y**2))
-            img = img * 0.7 + gaussian_rot * intensity * 0.3
+            img = img * 0.8 + gaussian_rot * intensity * 0.2
 
-        # 添加背景噪声
-        img += np.random.normal(10, 5, (height, width))
-
-        # 添加随机火花（10%概率）
-        if np.random.random() < 0.1:
-            spark_x = np.random.randint(margin, width-margin)
-            spark_y = np.random.randint(margin, height-margin)
-            spark_sigma = np.random.uniform(3, 8)
-            spark_intensity = np.random.uniform(intensity * 0.5, intensity * 1.5)
-
-            spark_gaussian = np.exp(-0.5 * ((x - spark_x)**2 + (y - spark_y)**2) / spark_sigma**2)
-            img += spark_gaussian * spark_intensity
+        # 减小背景噪声
+        img += np.random.normal(5, 2, (height, width))
 
         # 确保没有负值
         img = np.maximum(img, 0)

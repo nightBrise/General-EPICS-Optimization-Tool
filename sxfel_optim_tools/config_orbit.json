@@ -25,7 +25,30 @@
       "LA-BI:SBPM10:POS_X",
       "LA-BI:SBPM10:POS_Y"
     ],
-    "params": {}
+    "params": {
+      "reference_orbit": {
+        "LA-BI:SBPM1:POS_X": 0.5,
+        "LA-BI:SBPM1:POS_Y": 0.3,
+        "LA-BI:SBPM2:POS_X": 0.4,
+        "LA-BI:SBPM2:POS_Y": 0.2,
+        "LA-BI:SBPM3:POS_X": 0.3,
+        "LA-BI:SBPM3:POS_Y": 0.1,
+        "LA-BI:SBPM4:POS_X": 0.2,
+        "LA-BI:SBPM4:POS_Y": 0.0,
+        "LA-BI:SBPM5:POS_X": 0.1,
+        "LA-BI:SBPM5:POS_Y": -0.1,
+        "LA-BI:SBPM6:POS_X": 0.0,
+        "LA-BI:SBPM6:POS_Y": -0.2,
+        "LA-BI:SBPM7:POS_X": -0.1,
+        "LA-BI:SBPM7:POS_Y": -0.3,
+        "LA-BI:SBPM8:POS_X": -0.2,
+        "LA-BI:SBPM8:POS_Y": -0.4,
+        "LA-BI:SBPM9:POS_X": -0.3,
+        "LA-BI:SBPM9:POS_Y": -0.5,
+        "LA-BI:SBPM10:POS_X": -0.4,
+        "LA-BI:SBPM10:POS_Y": -0.6
+      }
+    }
   },
   "bpm_pvs": [
     "LA-BI:SBPM1:POS_X",
