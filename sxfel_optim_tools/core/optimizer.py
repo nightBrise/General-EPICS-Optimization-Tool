@@ -60,13 +60,18 @@ class Optimizer:
         obj_type = self.config.get('objective', {}).get('type', 'unknown')
 
         # 选择设备
-        device_pvs, current_values, bounds = select_optimization_devices(
+        device_pvs, current_values, bounds, device_configs = select_optimization_devices(
             self.config, device_types, device_pvs
         )
 
         # 保存初始值（用于回滚）
         self.initial_device_values = current_values.copy()
         self.initial_device_pvs = device_pvs.copy()
+        self.device_configs = device_configs
+
+        # 将设备配置传递给目标函数
+        if hasattr(self.objective_fn, 'device_configs'):
+            self.objective_fn.device_configs = device_configs
 
         # 定义参数空间
         parametrization = ng.p.Instrumentation(

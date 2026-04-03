@@ -303,3 +303,14 @@ best_params, best_score, device_pvs, history = optimizer.run()
 | `beam_size` | 束流尺寸优化 | `core/objectives/beam.py` |
 | `orbit` | 轨道优化（全0/参考） | `core/objectives/orbit_zero.py` |
 | `orbit_zero` | 轨道零点优化（兼容旧接口） | `core/objectives/orbit_zero.py` |
+| `orbit_ref` | 参考轨道优化（兼容旧接口） | `core/objectives/orbit_ref.py` |
+
+## 注意事项
+
+### 线程安全
+
+`EPICSBackend` 单例模式存在线程安全问题：`_use_simulator` 是类变量而非实例变量，多线程环境下可能产生竞态条件。如需在多线程环境使用，请注意同步。
+
+### 测试覆盖
+
+核心模块（objectives、optimizer、epics_backend 等）目前缺乏单元测试，修改代码时请注意回归测试。

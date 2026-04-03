@@ -57,6 +57,7 @@ sxfel_optim_tools/
 │   │   └── metrics.py          # 线程安全指标追踪器
 │   ├── optimizer.py            # Nevergrad 封装
 │   ├── simulator.py            # EPICS 模拟器
+│   ├── step_manager.py        # 自适应步长管理器
 │   ├── results.py              # 结果保存/加载 (HDF5)
 │   └── utils.py               # 通用工具函数
 ├── tools/                      # 辅助工具
@@ -165,20 +166,30 @@ python run_optimization.py --config config.json --simulator
 - **`core/epics_backend.py`**：`EPICSBackend` 单例类，统一管理模拟器/真实 EPICS 切换
 - **`core/objectives/registry.py`**：`@register_objective` 装饰器，`create_objective()` 工厂函数
 - **`core/optimizer.py`**：`Optimizer` 类封装 Nevergrad 优化循环，支持早停和回滚
-- **`core/simulator.py`**：`SimpleEPICSSimulator` 模拟 EPICS PV，支持相机图像和 BPM 轨道
+- **`core/simulator.py`**：`SimpleEPICSSimulator` 模拟 EPICS PV，支持相机图像、BPM 轨道、增益控制和越界检测
+- **`core/step_manager.py`**：`StepManager` 自适应步长管理器，根据迭代阶段和光斑移动速度动态调整步长
 - **`core/utils.py`**：`load_config`, `safe_device_operation`, `select_optimization_devices`, `wait_for_all_devices_settled`
 
 ## 评分公式
 
 **束流优化**：
 ```
-score = 0.5 * size_score + 0.5 * non_roundness_penalty
+score = w_size × size_score + w_roundness × non_roundness_penalty + w_position × position_penalty
+       + w_intensity × intensity_penalty + w_gaussian × gaussian_penalty
 ```
+其中权重由 `beam_mode`（size_focus/balanced/roundness_focus）和 `fel_mode`（none/soft/both）控制。
 
 **轨道优化**：
 ```
-score = sqrt(sum((bpm_reading - target)^2))
+score = RMS + α×Peak + β×Roughness + γ×Coupling + δ×Skew
 ```
+其中权重由 `mode`（smooth/balanced/aggressive）控制。
+
+## 已知问题
+
+- `core/epics_backend.py` 的 `EPICSBackend` 单例模式存在线程安全问题（`_use_simulator` 是类变量）
+- 核心模块（objectives、optimizer、epics_backend 等）缺乏单元测试
+- `beam.py` 中存在部分代码重复（`optimize_beam()` 与 `BeamObjective.get_score()`）
 
 ## 新增目标函数
 

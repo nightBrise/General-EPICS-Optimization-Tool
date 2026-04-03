@@ -12,6 +12,7 @@ from .base import BaseObjective
 from .registry import register_objective
 from .metrics import metrics
 from ..epics_backend import caget, caput, caget_many, caput_many
+from ..step_manager import StepManager
 from ..utils import (
     safe_device_operation,
     select_optimization_devices,
@@ -25,6 +26,14 @@ BEAM_MODE_WEIGHTS = {
     'size_focus':      {'size': 0.7, 'roundness': 0.3, 'position': 0.0},   # 强尺寸优先
     'balanced':        {'size': 0.5, 'roundness': 0.4, 'position': 0.1},  # 平衡（默认）
     'roundness_focus': {'size': 0.3, 'roundness': 0.6, 'position': 0.1},  # 强圆度优先
+}
+
+# FEL优化模式权重配置
+FEL_MODE_WEIGHTS = {
+    'none':      {'intensity': 0.0, 'gaussian': 0.0},   # 禁用FEL指标
+    'intensity': {'intensity': 0.4, 'gaussian': 0.0},  # 强度优先
+    'soft':      {'intensity': 0.25, 'gaussian': 0.15},  # 平衡偏强度（默认）
+    'both':      {'intensity': 0.2, 'gaussian': 0.2},   # 两者均衡
 }
 
 
@@ -59,6 +68,10 @@ class BeamObjective(BaseObjective):
         # 位置维持默认为 true
         self.maintain_position = self.params.get('maintain_position', True)
 
+        # FEL优化模式配置
+        self.fel_mode = self.params.get('fel_mode', 'soft')
+        self.intensity_mode = self.params.get('intensity_mode', 'max')
+
         # 参数配置
         self.repetition_rate = self.params.get('repetition_rate', 10)
         self.min_adjust_interval = self.params.get('min_adjust_interval', 6)
@@ -66,10 +79,21 @@ class BeamObjective(BaseObjective):
         self.tolerance = self.params.get('tolerance', 0.0001)
         self.max_wait = self.params.get('max_wait', 10)
 
+        # 设备配置（包含步长和敏感度）
+        self.device_configs = []
+
         self.initial_centroid_x = None
         self.initial_centroid_y = None
         self._raw_image = None
         self._last_adjust_time = 0
+        self._step_manager = None
+        self._is_first_evaluation = True  # 标记是否为首次评估
+        self._last_params = None  # 上一次的参数值
+        self._last_centroid = None  # 上一次的光斑位置
+        self._last_metrics = None  # 上一次的光斑指标（用于计算影响）
+        self._last_valid_params = None  # 最后有效的参数（越界前回滚用）
+        self._consecutive_out_of_bounds = 0  # 连续越界次数计数器
+        self._max_consecutive_out_of_bounds = 5  # 连续越界最大次数，超过则强制终止优化
 
     def get_score(self, params, device_pvs):
         """评估束流尺寸
@@ -81,19 +105,31 @@ class BeamObjective(BaseObjective):
         Returns:
             float: 综合评分（越小越好）
         """
-        # 1. 安全设置设备参数
+        # 0. 初始化步长管理器（仅在后续评估时使用）
+        if self._step_manager is None and self.device_configs:
+            self._step_manager = StepManager(device_pvs, self.device_configs)
+
+        # 1. 获取当前设备值并应用步长限制（首次评估时不限制，允许初始化）
+        if self._step_manager is not None and not self._is_first_evaluation:
+            current_values = caget_many(device_pvs)
+            params = self._step_manager.clamp_params(params, current_values)
+
+        # 标记已进行首次评估
+        self._is_first_evaluation = False
+
+        # 2. 安全设置设备参数
         success = safe_device_operation(device_pvs, params, self.config)
         if not success:
             return float('inf')
 
-        # 2. 检查硬件调整间隔
+        # 3. 检查硬件调整间隔
         elapsed = time.time() - self._last_adjust_time
         if elapsed < self.min_adjust_interval:
             wait_time = self.min_adjust_interval - elapsed
             print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
             time.sleep(wait_time)
 
-        # 3. 轮询等待所有元件达到设定值
+        # 4. 轮询等待所有元件达到设定值
         from ..utils import wait_for_all_devices_settled
         success, failed_devs = wait_for_all_devices_settled(
             device_pvs, params,
@@ -115,8 +151,8 @@ class BeamObjective(BaseObjective):
 
         self._last_adjust_time = time.time()
 
-        # 4. 获取平均图像和束斑指标
-        raw_image, size_x, size_y, centroid_x, centroid_y, combined_size, roundness = \
+        # 5. 获取平均图像和束斑指标
+        raw_image, size_x, size_y, centroid_x, centroid_y, combined_size, roundness, intensity, gaussian_residual = \
             self._get_average_YAG_image()
 
         self._raw_image = raw_image
@@ -137,10 +173,51 @@ class BeamObjective(BaseObjective):
             'size_x': size_x,
             'size_y': size_y,
             'roundness': roundness,
+            'intensity': intensity,
+            'gaussian_residual': gaussian_residual,
             'params': params.copy(),
             'centroid_x': centroid_x,
             'centroid_y': centroid_y
         }
+
+        # 5.5 越界检测：如果光斑越界，回滚参数并返回高惩罚
+        is_out_of_bounds, bounds_penalty = self._check_spot_out_of_bounds(
+            size_x, size_y, centroid_x, centroid_y
+        )
+        if is_out_of_bounds:
+            self._consecutive_out_of_bounds += 1
+            print(f"  警告: 连续越界第 {self._consecutive_out_of_bounds} 次")
+
+            # 超过最大连续越界次数，强制终止优化
+            if self._consecutive_out_of_bounds >= self._max_consecutive_out_of_bounds:
+                from core.optimizer import OptimizationError
+                raise OptimizationError(
+                    f"连续 {self._consecutive_out_of_bounds} 次越界，光斑位置无法控制在有效范围内。"
+                    "请检查：(1) 初始光斑位置是否在视场中心；(2) 设备参数范围是否合理。"
+                )
+
+            # 保存当前参数作为上一步有效参数（用于下次越界时回滚）
+            self._last_valid_params = self._last_params.copy() if self._last_params is not None else params.copy()
+
+            # 回滚参数并验证
+            self._rollback_params(device_pvs)
+
+            # 更新状态以反映回滚后的实际状态（Bug 3修复）
+            # 读取回滚后的实际设备值
+            rolled_back_values = caget_many(device_pvs)
+            self._last_params = list(rolled_back_values)
+            self._last_metrics = current_metrics.copy()
+            self._last_centroid = (centroid_x, centroid_y)
+
+            # 返回高惩罚分数
+            metrics.update(current_metrics, bounds_penalty)
+            return bounds_penalty
+
+        # 未越界，重置连续越界计数器
+        self._consecutive_out_of_bounds = 0
+
+        # 保存当前参数作为上一步有效参数
+        self._last_valid_params = params.copy()
 
         # 获取模式权重
         w = BEAM_MODE_WEIGHTS.get(self.beam_mode, BEAM_MODE_WEIGHTS['balanced'])
@@ -181,14 +258,267 @@ class BeamObjective(BaseObjective):
             current_metrics['position_distance'] = distance
             current_metrics['normalized_distance'] = normalized_distance
 
+        # FEL指标惩罚计算
+        fel_weights = FEL_MODE_WEIGHTS.get(self.fel_mode, FEL_MODE_WEIGHTS['soft'])
+        intensity_penalty = 0.0
+        gaussian_penalty = 0.0
+
+        if fel_weights['intensity'] > 0 and intensity is not None and np.isfinite(intensity) and intensity > 0:
+            # 使用对数刻度避免溢出，同时保持单调性
+            # intensity 越高，penalty 越低（越好）
+            if self.intensity_mode == 'sum':
+                # 总强度模式：最大化总强度，使用对数避免大数问题
+                intensity_penalty = 1.0 / (np.log1p(intensity) + 1e-10)
+            else:
+                # 默认max模式：peak intensity 已经是归一化后的值
+                intensity_penalty = 1.0 / (intensity + 1e-10)
+
+        if fel_weights['gaussian'] > 0 and gaussian_residual is not None and np.isfinite(gaussian_residual):
+            # 高斯残差越小越好
+            gaussian_penalty = gaussian_residual
+
         # 综合评分
         score = (w['size'] * size_score
                  + w['roundness'] * non_roundness_penalty
-                 + w['position'] * position_penalty)
+                 + w['position'] * position_penalty
+                 + fel_weights['intensity'] * intensity_penalty
+                 + fel_weights['gaussian'] * gaussian_penalty)
 
         metrics.update(current_metrics, score)
 
+        # 6. 检测光斑变化，计算影响并更新步长
+        if self._step_manager is not None and self._last_params is not None:
+            self._check_spot_velocity_and_adjust_steps(params, device_pvs, current_metrics)
+
+        # 7. 更新步长管理器阶段
+        if self._step_manager is not None:
+            self._step_manager.update_phase(score)
+
+        # 记录当前状态供下次比较
+        self._last_params = params.copy()
+        self._last_centroid = (centroid_x, centroid_y)
+        self._last_metrics = current_metrics.copy()
+
         return score
+
+    def _compute_influence(self, before_metrics, after_metrics, param_changes):
+        """计算综合影响值
+
+        Args:
+            before_metrics: 调整前的指标字典
+            after_metrics: 调整后的指标字典
+            param_changes: 各元件参数变化量
+
+        Returns:
+            dict: 各元件的影响值
+        """
+        img_width, img_height = self.camera_shape
+        img_diagonal = np.sqrt(img_width**2 + img_height**2)
+
+        influences = []
+
+        for i, (param_change, before, after) in enumerate(zip(param_changes, before_metrics, after_metrics)):
+            if abs(param_change) < 1e-9:
+                influences.append(0.0)
+                continue
+
+            # 位置影响（对角线百分比）
+            dx = after['centroid_x'] - before['centroid_x']
+            dy = after['centroid_y'] - before['centroid_y']
+            pos_change = np.sqrt(dx**2 + dy**2) / img_diagonal * 100
+
+            # 圆度影响
+            roundness_before = before['size_x'] / before['size_y'] if before['size_y'] > 0 else 1
+            roundness_after = after['size_x'] / after['size_y'] if after['size_y'] > 0 else 1
+            roundness_change = abs(roundness_after - roundness_before)
+
+            # 强度影响（使用真实的 intensity 指标）
+            intensity_before = before.get('intensity', 0) or before.get('physical_size', 0)
+            intensity_after = after.get('intensity', 0) or after.get('physical_size', 0)
+            max_intensity = max(intensity_before, intensity_after, 1)
+            if max_intensity > 0:
+                intensity_change = abs(intensity_after - intensity_before) / max_intensity * 100
+            else:
+                intensity_change = 0
+
+            # 综合影响 = 位置影响 + 圆度变化×10 + 强度变化
+            # 乘以100是为了放大差异，便于后续计算敏感度
+            total_influence = pos_change + roundness_change * 100 + intensity_change * 10
+
+            influences.append(total_influence)
+
+        return influences
+
+    def _check_spot_velocity_and_adjust_steps(self, params, device_pvs, current_metrics):
+        """检测光斑变化，计算影响并更新步长
+
+        Args:
+            params: 当前参数
+            device_pvs: 设备PV列表
+            current_metrics: 当前的光斑指标字典
+        """
+        if self._last_metrics is None or self._last_params is None:
+            return
+
+        # 计算参数变化（带方向）
+        param_changes = [p - lp for p, lp in zip(params, self._last_params)]
+        param_change_magnitudes = [abs(c) for c in param_changes]
+
+        # 计算影响值
+        influences = self._compute_influence(
+            self._last_metrics, current_metrics, param_change_magnitudes
+        )
+
+        # 记录每个元件的影响（带方向）
+        for i, influence in enumerate(influences):
+            if influence > 0:
+                direction = 1 if param_changes[i] > 0 else -1
+                self._step_manager.record_influence_with_direction(i, influence, direction)
+
+        # 判断是否进入动态调整阶段
+        should_adjust, reason = self._step_manager.should_transition_to_adjustment()
+        if should_adjust:
+            print(f"  {reason}")
+            self._step_manager.set_phase('adjustment')
+
+        # 计算敏感度因子（使用EWMA）
+        self._step_manager.compute_sensitivity_factors()
+
+        # 根据光斑移动速度调整步长
+        if self._last_centroid is not None:
+            dx = current_metrics['centroid_x'] - self._last_centroid[0]
+            dy = current_metrics['centroid_y'] - self._last_centroid[1]
+            move_distance = np.sqrt(dx**2 + dy**2)
+
+            for i, influence in enumerate(influences):
+                if influence > 0:
+                    if move_distance > 50:  # 移动过大，减小步长
+                        self._step_manager.adjust_device_step(i, 0.5)
+                    elif move_distance < 5:  # 移动过小，增大步长
+                        self._step_manager.adjust_device_step(i, 1.5)
+
+        # 打印敏感度信息
+        phase_info = self._step_manager.get_phase_info()
+        print(f"  步长阶段: {phase_info['phase']}, 敏感度因子: {[f'{s:.2f}' for s in phase_info['sensitivity_factors']]}")
+
+    def _check_spot_out_of_bounds(self, size_x, size_y, centroid_x, centroid_y):
+        """检测光斑边缘是否越界，临近边缘时渐进惩罚，越界时回滚
+
+        Args:
+            size_x: 光斑宽度
+            size_y: 光斑高度
+            centroid_x: 光斑质心 x
+            centroid_y: 光斑质心 y
+
+        Returns:
+            tuple: (is_out_of_bounds: bool, penalty: float)
+        """
+        img_width, img_height = self.camera_shape
+
+        # 计算光斑边缘
+        half_x = size_x / 2
+        half_y = size_y / 2
+        left_edge = centroid_x - half_x
+        right_edge = centroid_x + half_x
+        top_edge = centroid_y - half_y
+        bottom_edge = centroid_y + half_y
+
+        # 预警区域：边缘的 15% 作为预警区
+        warning_margin_x = img_width * 0.15
+        warning_margin_y = img_height * 0.15
+
+        penalty = 0.0
+        warnings = []
+        is_out_of_bounds = False
+
+        # 检测左边缘
+        if left_edge < 0:
+            overflow = -left_edge / half_x
+            penalty += overflow * 1000
+            warnings.append(f"左溢出{overflow*100:.1f}%")
+            is_out_of_bounds = True
+        elif left_edge < warning_margin_x:
+            ratio = (warning_margin_x - left_edge) / warning_margin_x
+            penalty += ratio * 100
+            warnings.append(f"左预警({left_edge:.0f}<{warning_margin_x:.0f})")
+
+        # 检测右边缘
+        if right_edge > img_width:
+            overflow = (right_edge - img_width) / half_x
+            penalty += overflow * 1000
+            warnings.append(f"右溢出{overflow*100:.1f}%")
+            is_out_of_bounds = True
+        elif right_edge > img_width - warning_margin_x:
+            ratio = (right_edge - (img_width - warning_margin_x)) / warning_margin_x
+            penalty += ratio * 100
+            warnings.append(f"右预警({right_edge:.0f}>{img_width-warning_margin_x:.0f})")
+
+        # 检测上边缘
+        if top_edge < 0:
+            overflow = -top_edge / half_y
+            penalty += overflow * 1000
+            warnings.append(f"上溢出{overflow*100:.1f}%")
+            is_out_of_bounds = True
+        elif top_edge < warning_margin_y:
+            ratio = (warning_margin_y - top_edge) / warning_margin_y
+            penalty += ratio * 100
+            warnings.append(f"上预警({top_edge:.0f}<{warning_margin_y:.0f})")
+
+        # 检测下边缘
+        if bottom_edge > img_height:
+            overflow = (bottom_edge - img_height) / half_y
+            penalty += overflow * 1000
+            warnings.append(f"下溢出{overflow*100:.1f}%")
+            is_out_of_bounds = True
+        elif bottom_edge > img_height - warning_margin_y:
+            ratio = (bottom_edge - (img_height - warning_margin_y)) / warning_margin_y
+            penalty += ratio * 100
+            warnings.append(f"下预警({bottom_edge:.0f}>{img_height-warning_margin_y:.0f})")
+
+        if warnings:
+            status = "越界回滚" if is_out_of_bounds else "预警"
+            print(f"  束斑位置[{status}]: {', '.join(warnings)}, 惩罚={penalty:.1f}")
+
+        return is_out_of_bounds, penalty
+
+    def _rollback_params(self, device_pvs):
+        """回滚参数到上一步有效值（带验证）
+
+        Args:
+            device_pvs: 设备PV列表
+
+        Returns:
+            bool: 回滚是否成功
+        """
+        if self._last_valid_params is None:
+            return False
+
+        print(f"  回滚参数到上一步有效值...")
+        from ..utils import safe_device_operation, wait_for_all_devices_settled
+
+        # 写入参数
+        success = safe_device_operation(device_pvs, self._last_valid_params, self.config)
+        if not success:
+            print(f"  警告: 回滚参数写入失败")
+            return False
+
+        # 等待设备稳定（验证回滚是否成功）
+        success, failed_devs = wait_for_all_devices_settled(
+            device_pvs, self._last_valid_params,
+            tolerance=self.tolerance,
+            max_wait=self.max_wait,
+            poll_interval=self.poll_interval
+        )
+
+        if not success:
+            print(f"  警告: 回滚后以下设备未达到设定值:")
+            for pv, info in failed_devs.items():
+                if info['deviation'] is not None:
+                    print(f"    - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}")
+
+        # 等待额外时间确保光斑稳定
+        time.sleep(0.5)
+        return success
 
     def _get_average_YAG_image(self):
         """获取并平均多次YAG图像"""
@@ -198,6 +528,11 @@ class BeamObjective(BaseObjective):
         camera_pv = self.camera_config.get('pv', 'LA-BI:PRF22:RAW:ArrayData')
         shape = self.camera_shape
 
+        # 根据fel_mode决定是否计算强度和高斯残差
+        fel_weights = FEL_MODE_WEIGHTS.get(self.fel_mode, FEL_MODE_WEIGHTS['soft'])
+        compute_intensity = fel_weights['intensity'] > 0
+        compute_gaussian = fel_weights['gaussian'] > 0
+
         for _ in range(self.num_averages):
             img = get_image_from_YAG(camera_pv, shape)
             if img is not None and np.any(img > 0):
@@ -206,14 +541,15 @@ class BeamObjective(BaseObjective):
                 time.sleep(0.5)
 
         if valid_count == 0:
-            return None, float('inf'), float('inf'), -1, -1, float('inf'), 0
+            return None, float('inf'), float('inf'), -1, -1, float('inf'), 0, None, None
 
         averaged_image = np.mean(raw_images, axis=0)
-        size_x, size_y, centroid_x, centroid_y = calculate_spot_metrics(averaged_image)
+        size_x, size_y, centroid_x, centroid_y, intensity, gaussian_residual = \
+            calculate_spot_metrics(averaged_image, return_intensity=compute_intensity, return_gaussian=compute_gaussian)
         combined_size = np.sqrt(size_x**2 + size_y**2) if np.isfinite(size_x) and np.isfinite(size_y) else float('inf')
         roundness = min(size_x, size_y) / max(size_x, size_y) if max(size_x, size_y) > 0 else 0
 
-        return raw_images[0], size_x, size_y, centroid_x, centroid_y, combined_size, roundness
+        return raw_images[0], size_x, size_y, centroid_x, centroid_y, combined_size, roundness, intensity, gaussian_residual
 
     def save_results(self, history, config, results_dir='results'):
         """保存优化结果到HDF5文件
@@ -426,12 +762,15 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, device_types=None, devic
         'is_best': []
     }
 
-    device_pvs, current_values, bounds = select_optimization_devices(
+    device_pvs, current_values, bounds, device_configs = select_optimization_devices(
         config,
         device_types,
         device_pvs,
         use_default_fallback=True
     )
+
+    # 初始化步长管理器
+    step_manager = StepManager(device_pvs, device_configs)
 
     opt_config = config.get('optimization', {})
     algorithm = opt_config.get('algorithm', algorithm)
@@ -524,6 +863,14 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, device_types=None, devic
     for i in range(budget):
         try:
             candidate = optimizer.ask()
+
+            # 应用步长限制
+            params = [candidate.kwargs[f"x{i}"] for i in range(len(device_pvs))]
+            current_device_values = caget_many(device_pvs)
+            adjusted_params = step_manager.clamp_params(params, current_device_values)
+            for j in range(len(device_pvs)):
+                candidate.kwargs[f"x{j}"] = adjusted_params[j]
+
             value = objective_function(candidate.kwargs, device_pvs, config)
 
             if np.isinf(value) or np.isnan(value):
@@ -531,6 +878,9 @@ def optimize_beam(config, algorithm='NGOpt', budget=50, device_types=None, devic
                 value = float('inf')
 
             optimizer.tell(candidate, value)
+
+            # 更新步长管理器阶段
+            step_manager.update_phase(value)
 
             params = [candidate.kwargs[f"x{i}"] for i in range(len(device_pvs))]
             current_metrics = metrics.get_current()

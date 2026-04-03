@@ -20,6 +20,9 @@ class SimpleEPICSSimulator:
         self.random = random.Random(seed)
         np.random.seed(seed)
         self.pv_values = {}
+        # 越界回滚：保存最后有效的设备参数
+        self._last_valid_params = {}
+        self._rollback_enabled = True
         self._initialize_default_values()
 
     def _initialize_default_values(self):
@@ -85,9 +88,14 @@ class SimpleEPICSSimulator:
         # 生成网格
         y, x = np.ogrid[:height, :width]
 
-        # 生成高斯束流
+        # 获取当前增益
+        gain = self.pv_values.get('LA-BI:PRF22:CAM:GainRaw', 100)
+
+        # 生成高斯束流（强度受增益控制）
         gaussian = np.exp(-0.5 * ((x - x_center)**2 + (y - y_center)**2) / sigma_base**2)
-        img = gaussian * np.random.uniform(3000, 6000)  # 随机强度
+        base_intensity = np.random.uniform(3000, 6000)
+        intensity = base_intensity * (gain / 100.0)
+        img = gaussian * intensity
 
         # 添加少量背景噪声
         img += np.random.normal(10, 5, shape)
@@ -100,6 +108,9 @@ class SimpleEPICSSimulator:
     def _update_beam_image(self, shape=(1040, 1392)):
         """根据设备参数更新束流图像，使用配置中的尺寸(1040, 1392)"""
         height, width = shape
+
+        # 获取当前增益
+        gain = self.pv_values.get('LA-BI:PRF22:CAM:GainRaw', 100)
 
         # 从参数中提取四极磁铁Q34-Q40的值（取平均效果）
         q_values = []
@@ -118,10 +129,18 @@ class SimpleEPICSSimulator:
         x_center = width // 2 + int(ch_avg * width * 0.8)  # CH影响水平位置
         y_center = height // 2 + int(cv_avg * height * 0.8)  # CV影响垂直位置
 
-        # 限制中心位置在图像内
-        margin = min(width, height) // 10
-        x_center = np.clip(x_center, margin, width - margin)
-        y_center = np.clip(y_center, margin, height - margin)
+        # 越界检测
+        margin = min(width, height) // 10  # 10%边距
+        x_in_bounds = margin <= x_center < width - margin
+        y_in_bounds = margin <= y_center < height - margin
+
+        if not (x_in_bounds and y_in_bounds):
+            # 保存当前参数用于回滚记录
+            self._last_valid_params['x_center'] = x_center
+            self._last_valid_params['y_center'] = y_center
+            # 限制光斑位置在安全范围内
+            x_center = np.clip(x_center, margin, width - margin)
+            y_center = np.clip(y_center, margin, height - margin)
 
         # 四极磁铁影响束流尺寸 - 使用更大的系数让变化更明显
         sigma_base = min(width, height) * 0.08  # 基础尺寸
@@ -129,8 +148,9 @@ class SimpleEPICSSimulator:
         sigma_x = sigma_base * (1.0 - q_avg * 0.5)
         sigma_y = sigma_base * (1.0 + q_avg * 0.5)
 
-        # 固定强度，减小随机性
-        intensity = 5000.0
+        # 强度受增益控制
+        base_intensity = 5000.0
+        intensity = base_intensity * (gain / 100.0)
 
         # 生成网格
         y, x = np.ogrid[:height, :width]

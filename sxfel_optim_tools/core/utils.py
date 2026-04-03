@@ -263,7 +263,7 @@ def select_optimization_devices(config, device_types=None, device_pvs=None, use_
         use_default_fallback: 当EPICS读取失败时是否使用默认值
 
     Returns:
-        tuple: (设备PV列表, 当前值列表, 边界列表)
+        tuple: (设备PV列表, 当前值列表, 边界列表, 设备配置列表)
     """
     selected_devices = []
 
@@ -274,7 +274,11 @@ def select_optimization_devices(config, device_types=None, device_pvs=None, use_
             for device_type, devices in config['devices'].items():
                 for device in devices:
                     if device['pv'] == pv:
-                        selected_devices.append((pv, device['range']))
+                        selected_devices.append({
+                            'pv': pv,
+                            'range': device['range'],
+                            'base_step': device.get('base_step', 0.01)
+                        })
                         found = True
                         break
                 if found:
@@ -285,19 +289,30 @@ def select_optimization_devices(config, device_types=None, device_pvs=None, use_
         for device_type in device_types:
             if device_type in config['devices']:
                 for device in config['devices'][device_type]:
-                    selected_devices.append((device['pv'], device['range']))
+                    selected_devices.append({
+                        'pv': device['pv'],
+                        'range': device['range'],
+                        'base_step': device.get('base_step', 0.01)
+                    })
             else:
                 print(f"警告: 设备类型 {device_type} 未在配置中找到")
     else:
         for device_type, devices in config['devices'].items():
             for device in devices:
-                selected_devices.append((device['pv'], device['range']))
+                selected_devices.append({
+                    'pv': device['pv'],
+                    'range': device['range'],
+                    'base_step': device.get('base_step', 0.01),
+                    'sensitivity': device.get('sensitivity', 1.0)
+                })
 
     if not selected_devices:
         raise ValueError("没有选择任何设备进行优化")
 
-    device_pvs = [d[0] for d in selected_devices]
-    bounds = [d[1] for d in selected_devices]
+    device_pvs = [d['pv'] for d in selected_devices]
+    bounds = [d['range'] for d in selected_devices]
+    device_configs = [{'base_step': d['base_step']}
+                      for d in selected_devices]
 
     # 获取当前值
     print("\n从EPICS读取当前值...")
@@ -318,10 +333,11 @@ def select_optimization_devices(config, device_types=None, device_pvs=None, use_
 
     # 打印结果
     print(f"\n已选择 {len(device_pvs)} 个设备进行优化:")
-    for i, (pv, current_val, bound) in enumerate(zip(device_pvs, current_values, bounds)):
-        print(f"  {i+1}. {pv}: 当前值={current_val:.4f}, 范围={bound}")
+    for i, (pv, current_val, bound, cfg) in enumerate(zip(device_pvs, current_values, bounds, device_configs)):
+        print(f"  {i+1}. {pv}: 当前值={current_val:.4f}, 范围={bound}, "
+              f"步长={cfg['base_step']:.4f}")
 
-    return device_pvs, current_values, bounds
+    return device_pvs, current_values, bounds, device_configs
 
 
 def get_image_from_YAG(camera_pv, shape):
@@ -353,19 +369,27 @@ def get_image_from_YAG(camera_pv, shape):
         return None
 
 
-def calculate_spot_metrics(image):
+def calculate_spot_metrics(image, return_intensity=False, return_gaussian=False):
     """计算光斑尺寸和位置 - 使用自适应降噪
 
     Args:
         image: 二维图像数组
+        return_intensity: 是否返回光斑强度
+        return_gaussian: 是否返回高斯拟合残差
 
     Returns:
-        tuple: (size_x, size_y, centroid_x, centroid_y)
+        tuple: (size_x, size_y, centroid_x, centroid_y, intensity, gaussian_residual)
+            - intensity: beam_mask区域总强度（return_intensity=True时）
+            - gaussian_residual: 高斯拟合残差（return_gaussian=True时）
+            - 若不需要该指标，返回 None
     """
     from scipy.ndimage import uniform_filter, gaussian_filter
 
     if image is None or np.all(image == 0):
-        return float('inf'), float('inf'), -1, -1
+        result = [float('inf'), float('inf'), -1, -1]
+        result.append(None if not return_intensity else float('inf'))
+        result.append(None if not return_gaussian else float('inf'))
+        return tuple(result)
 
     try:
         # 自适应降噪
@@ -387,14 +411,20 @@ def calculate_spot_metrics(image):
         # 检查信号强度
         max_val = np.max(background_subtracted)
         if max_val < background_std * 3:
-            return float('inf'), float('inf'), -1, -1
+            result = [float('inf'), float('inf'), -1, -1]
+            result.append(None if not return_intensity else float('inf'))
+            result.append(None if not return_gaussian else float('inf'))
+            return tuple(result)
 
         # 计算半高宽阈值
         fwhm_threshold = max_val * 0.5
         beam_mask = background_subtracted > fwhm_threshold
 
         if np.sum(beam_mask) < 5:
-            return float('inf'), float('inf'), -1, -1
+            result = [float('inf'), float('inf'), -1, -1]
+            result.append(None if not return_intensity else float('inf'))
+            result.append(None if not return_gaussian else float('inf'))
+            return tuple(result)
 
         # 计算尺寸
         x_proj = np.sum(beam_mask, axis=0)
@@ -402,12 +432,18 @@ def calculate_spot_metrics(image):
 
         x_indices = np.where(x_proj > 0)[0]
         if len(x_indices) < 2:
-            return float('inf'), float('inf'), -1, -1
+            result = [float('inf'), float('inf'), -1, -1]
+            result.append(None if not return_intensity else float('inf'))
+            result.append(None if not return_gaussian else float('inf'))
+            return tuple(result)
         size_x = x_indices[-1] - x_indices[0]
 
         y_indices = np.where(y_proj > 0)[0]
         if len(y_indices) < 2:
-            return float('inf'), float('inf'), -1, -1
+            result = [float('inf'), float('inf'), -1, -1]
+            result.append(None if not return_intensity else float('inf'))
+            result.append(None if not return_gaussian else float('inf'))
+            return tuple(result)
         size_y = y_indices[-1] - y_indices[0]
 
         # 计算质心
@@ -415,11 +451,104 @@ def calculate_spot_metrics(image):
         centroid_x = np.mean(x_coords)
         centroid_y = np.mean(y_coords)
 
-        return size_x, size_y, centroid_x, centroid_y
+        result = [size_x, size_y, centroid_x, centroid_y]
+
+        # 计算强度
+        if return_intensity:
+            intensity = np.sum(background_subtracted[beam_mask])
+            result.append(intensity)
+        else:
+            result.append(None)
+
+        # 计算高斯残差
+        if return_gaussian:
+            gaussian_residual = compute_gaussian_residual(
+                background_subtracted, centroid_x, centroid_y, size_x, size_y
+            )
+            result.append(gaussian_residual)
+        else:
+            result.append(None)
+
+        return tuple(result)
 
     except Exception as e:
         print(f"计算光斑指标失败: {e}")
-        return float('inf'), float('inf'), -1, -1
+        result = [float('inf'), float('inf'), -1, -1]
+        result.append(None if not return_intensity else float('inf'))
+        result.append(None if not return_gaussian else float('inf'))
+        return tuple(result)
+
+
+def compute_gaussian_residual(image, centroid_x, centroid_y, size_x, size_y):
+    """计算2D高斯拟合残差
+
+    Args:
+        image: 背景扣除后的图像数组
+        centroid_x: 光斑质心X
+        centroid_y: 光斑质心Y
+        size_x: 光斑X方向尺寸
+        size_y: 光斑Y方向尺寸
+
+    Returns:
+        float: 归一化残差 (sum((fitted - actual)²) / n)，越小表示越符合高斯分布
+    """
+    from scipy.optimize import curve_fit
+
+    if centroid_x < 0 or centroid_y < 0:
+        return float('inf')
+
+    try:
+        # 定义2D高斯函数
+        def gaussian_2d(coords, amplitude, x0, y0, sigma_x, sigma_y, offset):
+            x, y = coords
+            return offset + amplitude * np.exp(
+                -((x - x0)**2 / (2 * sigma_x**2) + (y - y0)**2 / (2 * sigma_y**2))
+            )
+
+        # 确定拟合区域（光斑周围3倍尺寸范围）
+        margin = max(size_x, size_y) * 2
+        x_min = max(0, int(centroid_x - margin))
+        x_max = min(image.shape[1], int(centroid_x + margin))
+        y_min = max(0, int(centroid_y - margin))
+        y_max = min(image.shape[0], int(centroid_y + margin))
+
+        if x_max <= x_min or y_max <= y_min:
+            return float('inf')
+
+        # 提取拟合区域
+        region = image[y_min:y_max, x_min:x_max]
+        y_indices, x_indices = np.indices(region.shape)
+
+        # 初始参数估计
+        amplitude = np.max(region)
+        offset = np.percentile(region, 10)
+        sigma_x = max(1, size_x / 3)
+        sigma_y = max(1, size_y / 3)
+
+        # 拟合
+        try:
+            popt, _ = curve_fit(
+                gaussian_2d,
+                (x_indices.flatten(), y_indices.flatten()),
+                region.flatten(),
+                p0=[amplitude, centroid_x - x_min, centroid_y - y_min, sigma_x, sigma_y, offset],
+                maxfev=1000
+            )
+
+            # 计算残差
+            fitted = gaussian_2d((x_indices, y_indices), *popt)
+            residual = np.sum((fitted - region)**2) / region.size
+            # 归一化残差
+            normalized_residual = residual / (amplitude**2 + 1e-10)
+
+            return normalized_residual
+
+        except Exception:
+            return float('inf')
+
+    except Exception as e:
+        print(f"计算高斯残差失败: {e}")
+        return float('inf')
 
 
 def wait_for_all_devices_settled(device_pvs, target_values, tolerance=0.0001, max_wait=10, poll_interval=0.2):

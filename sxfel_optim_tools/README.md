@@ -1,5 +1,5 @@
 # SXFEL 优化工具箱
-![version](https://img.shields.io/badge/version-v2.3-brightgreen)
+![version](https://img.shields.io/badge/version-v2.5-brightgreen)
 
 通用加速器优化框架，支持束流尺寸优化、轨道优化等多种优化任务。
 
@@ -28,8 +28,14 @@ python run_optimization.py --config config_orbit.json --mode ref --budget 50
 
 | 功能 | 说明 | 文档 |
 |------|------|------|
-| 束流尺寸优化 | 最小化束斑同时优化圆度 | [docs/beam_optimization.md](docs/beam_optimization.md) |
+| 束流尺寸优化 | 最小化束斑同时优化圆度，支持自适应步长 | [docs/beam_optimization.md](docs/beam_optimization.md) |
 | 轨道优化 | 调整校正子使 BPM 接近零或参考轨道 | [docs/orbit_optimization.md](docs/orbit_optimization.md) |
+
+### 核心特性
+
+- **自适应步长**：历史平均法动态确定元件敏感度，敏感元件小步长，不敏感元件大步长
+- **越界检测**：边缘预警+渐进惩罚，完全越界时回滚参数
+- **EPICS/模拟器双模式**：无需硬件即可测试
 
 ## 结果可视化
 
@@ -57,13 +63,26 @@ python tools/plot_results.py
 python run_optimization.py --config config.json --simulator
 ```
 
+模拟器支持：
+- 相机图像生成（Fortran 顺序输出）
+- BPM 轨道模拟
+- CCD 增益控制
+- 设备越界检测
+
 ## Web UI 界面
 
-Web UI 界面（Gradio）正在开发中，暂不可用。命令行工具已完全可用。
+提供 Web UI 界面（Gradio），可通过浏览器访问：
+
+```bash
+# 启动 Web UI
+python run_ui.py
+```
+
+Web UI 支持束流尺寸优化和轨道优化的图形化配置与实时监控。
 
 ## 详细文档
 
-- [束斑优化](docs/beam_optimization.md) - 配置参数、评分公式
+- [束斑优化](docs/beam_optimization.md) - 配置参数、评分公式、自适应步长
 - [轨道优化](docs/orbit_optimization.md) - 全0/参考模式、配置参数
 - [统一接口](docs/unified_interface.md) - 添加新目标函数
 - [UI 设计](docs/ui_design.md) - Gradio 界面规范
@@ -71,4 +90,4 @@ Web UI 界面（Gradio）正在开发中，暂不可用。命令行工具已完�
 ## 支持
 
 - 常规问题: zhangny@sari.ac.cn, zhangbw@sari.ac.cn
-- 最后更新: 2026-04-02
+- 最后更新: 2026-04-04
