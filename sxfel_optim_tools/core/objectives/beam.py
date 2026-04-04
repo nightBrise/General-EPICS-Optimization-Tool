@@ -109,197 +109,209 @@ class BeamObjective(BaseObjective):
         if self._step_manager is None and self.device_configs:
             self._step_manager = StepManager(device_pvs, self.device_configs)
 
-        # 1. 获取当前设备值并应用步长限制（首次评估时不限制，允许初始化）
-        if self._step_manager is not None and not self._is_first_evaluation:
-            current_values = caget_many(device_pvs)
-            params = self._step_manager.clamp_params(params, current_values)
+        # 保存初始值用于回滚（首次调用时）
+        if not self._params_saved:
+            from ..utils import get_current_values
+            self._initial_device_pvs = device_pvs.copy()
+            self._initial_device_values = get_current_values(device_pvs)
+            self._params_saved = True
 
-        # 标记已进行首次评估
-        self._is_first_evaluation = False
+        try:
+            # 1. 获取当前设备值并应用步长限制（首次评估时不限制，允许初始化）
+            if self._step_manager is not None and not self._is_first_evaluation:
+                current_values = caget_many(device_pvs)
+                params = self._step_manager.clamp_params(params, current_values)
 
-        # 2. 安全设置设备参数
-        success = safe_device_operation(device_pvs, params, self.config)
-        if not success:
-            return float('inf')
+            # 标记已进行首次评估
+            self._is_first_evaluation = False
 
-        # 3. 检查硬件调整间隔
-        elapsed = time.time() - self._last_adjust_time
-        if elapsed < self.min_adjust_interval:
-            wait_time = self.min_adjust_interval - elapsed
-            print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
-            time.sleep(wait_time)
+            # 2. 安全设置设备参数
+            success = safe_device_operation(device_pvs, params, self.config)
+            if not success:
+                return float('inf')
 
-        # 4. 轮询等待所有元件达到设定值
-        from ..utils import wait_for_all_devices_settled
-        success, failed_devs = wait_for_all_devices_settled(
-            device_pvs, params,
-            tolerance=self.tolerance,
-            max_wait=self.max_wait,
-            poll_interval=self.poll_interval
-        )
+            # 3. 检查硬件调整间隔
+            elapsed = time.time() - self._last_adjust_time
+            if elapsed < self.min_adjust_interval:
+                wait_time = self.min_adjust_interval - elapsed
+                print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
+                time.sleep(wait_time)
 
-        if not success:
-            error_msg = "错误: 以下元件写入失败:\n"
-            for pv, info in failed_devs.items():
-                if info['deviation'] is not None:
-                    error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.6f}\n"
-                else:
-                    error_msg += f"  - {pv}: 读取失败\n"
-            error_msg += "请处理上述问题，优化将回滚到初始参数。"
-            from core.optimizer import OptimizationError
-            raise OptimizationError(error_msg)
+            # 4. 轮询等待所有元件达到设定值
+            from ..utils import wait_for_all_devices_settled
+            success, failed_devs = wait_for_all_devices_settled(
+                device_pvs, params,
+                tolerance=self.tolerance,
+                max_wait=self.max_wait,
+                poll_interval=self.poll_interval
+            )
 
-        self._last_adjust_time = time.time()
-
-        # 5. 获取平均图像和束斑指标
-        raw_image, size_x, size_y, centroid_x, centroid_y, combined_size, roundness, intensity, gaussian_residual = \
-            self._get_average_YAG_image()
-
-        self._raw_image = raw_image
-
-        # 检查结果有效性
-        if not (np.isfinite(size_x) and np.isfinite(size_y) and
-                np.isfinite(centroid_x) and np.isfinite(centroid_y)):
-            return float('inf')
-
-        # 记录初始位置
-        if self.initial_centroid_x is None:
-            self.initial_centroid_x = centroid_x
-            self.initial_centroid_y = centroid_y
-
-        # 更新当前指标
-        current_metrics = {
-            'physical_size': combined_size,
-            'size_x': size_x,
-            'size_y': size_y,
-            'roundness': roundness,
-            'intensity': intensity,
-            'gaussian_residual': gaussian_residual,
-            'params': params.copy(),
-            'centroid_x': centroid_x,
-            'centroid_y': centroid_y
-        }
-
-        # 5.5 越界检测：如果光斑越界，回滚参数并返回高惩罚
-        is_out_of_bounds, bounds_penalty = self._check_spot_out_of_bounds(
-            size_x, size_y, centroid_x, centroid_y
-        )
-        if is_out_of_bounds:
-            self._consecutive_out_of_bounds += 1
-            print(f"  警告: 连续越界第 {self._consecutive_out_of_bounds} 次")
-
-            # 超过最大连续越界次数，强制终止优化
-            if self._consecutive_out_of_bounds >= self._max_consecutive_out_of_bounds:
+            if not success:
+                error_msg = "错误: 以下元件写入失败:\n"
+                for pv, info in failed_devs.items():
+                    if info['deviation'] is not None:
+                        error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.6f}\n"
+                    else:
+                        error_msg += f"  - {pv}: 读取失败\n"
+                error_msg += "请处理上述问题，优化将回滚到初始参数。"
                 from core.optimizer import OptimizationError
-                raise OptimizationError(
-                    f"连续 {self._consecutive_out_of_bounds} 次越界，光斑位置无法控制在有效范围内。"
-                    "请检查：(1) 初始光斑位置是否在视场中心；(2) 设备参数范围是否合理。"
-                )
+                raise OptimizationError(error_msg)
 
-            # 保存当前参数作为上一步有效参数（用于下次越界时回滚）
-            self._last_valid_params = self._last_params.copy() if self._last_params is not None else params.copy()
+            self._last_adjust_time = time.time()
 
-            # 回滚参数并验证
-            self._rollback_params(device_pvs)
+            # 5. 获取平均图像和束斑指标
+            raw_image, size_x, size_y, centroid_x, centroid_y, combined_size, roundness, intensity, gaussian_residual = \
+                self._get_average_YAG_image()
 
-            # 更新状态以反映回滚后的实际状态（Bug 3修复）
-            # 读取回滚后的实际设备值
-            rolled_back_values = caget_many(device_pvs)
-            self._last_params = list(rolled_back_values)
-            self._last_metrics = current_metrics.copy()
-            self._last_centroid = (centroid_x, centroid_y)
+            self._raw_image = raw_image
 
-            # 返回高惩罚分数
-            metrics.update(current_metrics, bounds_penalty)
-            return bounds_penalty
+            # 检查结果有效性
+            if not (np.isfinite(size_x) and np.isfinite(size_y) and
+                    np.isfinite(centroid_x) and np.isfinite(centroid_y)):
+                return float('inf')
 
-        # 未越界，重置连续越界计数器
-        self._consecutive_out_of_bounds = 0
+            # 记录初始位置
+            if self.initial_centroid_x is None:
+                self.initial_centroid_x = centroid_x
+                self.initial_centroid_y = centroid_y
 
-        # 保存当前参数作为上一步有效参数
-        self._last_valid_params = params.copy()
+            # 更新当前指标
+            current_metrics = {
+                'physical_size': combined_size,
+                'size_x': size_x,
+                'size_y': size_y,
+                'roundness': roundness,
+                'intensity': intensity,
+                'gaussian_residual': gaussian_residual,
+                'params': params.copy(),
+                'centroid_x': centroid_x,
+                'centroid_y': centroid_y
+            }
 
-        # 获取模式权重
-        w = BEAM_MODE_WEIGHTS.get(self.beam_mode, BEAM_MODE_WEIGHTS['balanced'])
+            # 5.5 越界检测：如果光斑越界，回滚参数并返回高惩罚
+            is_out_of_bounds, bounds_penalty = self._check_spot_out_of_bounds(
+                size_x, size_y, centroid_x, centroid_y
+            )
+            if is_out_of_bounds:
+                self._consecutive_out_of_bounds += 1
+                print(f"  警告: 连续越界第 {self._consecutive_out_of_bounds} 次")
 
-        # 计算尺寸评分
-        if self.target_mode == 'exact' and self.target_diagonal_size > 0:
-            # 精确目标模式
-            relative_error = (combined_size - self.target_diagonal_size) / self.target_diagonal_size
-            size_score = relative_error ** 2
-        elif self.target_mode == 'range':
-            # 范围目标模式
-            target_min, target_max = self.target_range
-            if target_min <= combined_size <= target_max:
-                size_score = 0.0
-            else:
-                if combined_size < target_min:
-                    deviation = target_min - combined_size
+                # 超过最大连续越界次数，强制终止优化
+                if self._consecutive_out_of_bounds >= self._max_consecutive_out_of_bounds:
+                    from core.optimizer import OptimizationError
+                    raise OptimizationError(
+                        f"连续 {self._consecutive_out_of_bounds} 次越界，光斑位置无法控制在有效范围内。"
+                        "请检查：(1) 初始光斑位置是否在视场中心；(2) 设备参数范围是否合理。"
+                    )
+
+                # 保存当前参数作为上一步有效参数（用于下次越界时回滚）
+                self._last_valid_params = self._last_params.copy() if self._last_params is not None else params.copy()
+
+                # 回滚参数并验证
+                self._rollback_params(device_pvs)
+
+                # 更新状态以反映回滚后的实际状态（Bug 3修复）
+                # 读取回滚后的实际设备值
+                rolled_back_values = caget_many(device_pvs)
+                self._last_params = list(rolled_back_values)
+                self._last_metrics = current_metrics.copy()
+                self._last_centroid = (centroid_x, centroid_y)
+
+                # 返回高惩罚分数
+                metrics.update(current_metrics, bounds_penalty)
+                return bounds_penalty
+
+            # 未越界，重置连续越界计数器
+            self._consecutive_out_of_bounds = 0
+
+            # 保存当前参数作为上一步有效参数
+            self._last_valid_params = params.copy()
+
+            # 获取模式权重
+            w = BEAM_MODE_WEIGHTS.get(self.beam_mode, BEAM_MODE_WEIGHTS['balanced'])
+
+            # 计算尺寸评分
+            if self.target_mode == 'exact' and self.target_diagonal_size > 0:
+                # 精确目标模式
+                relative_error = (combined_size - self.target_diagonal_size) / self.target_diagonal_size
+                size_score = relative_error ** 2
+            elif self.target_mode == 'range':
+                # 范围目标模式
+                target_min, target_max = self.target_range
+                if target_min <= combined_size <= target_max:
+                    size_score = 0.0
                 else:
-                    deviation = combined_size - target_max
-                size_score = deviation / max(target_max - target_min, 1)
-        else:
-            # 默认最小化模式
-            size_score = combined_size
-
-        # 圆度惩罚
-        non_roundness_penalty = combined_size * (1 - roundness)
-
-        # 位置惩罚（默认启用）
-        position_penalty = 0.0
-        if self.maintain_position:
-            dx = centroid_x - self.initial_centroid_x
-            dy = centroid_y - self.initial_centroid_y
-            distance = np.sqrt(dx**2 + dy**2)
-            img_width, img_height = self.camera_shape
-            img_diagonal = np.sqrt(img_width**2 + img_height**2)
-            normalized_distance = distance / img_diagonal
-            position_penalty = combined_size * normalized_distance * 100
-            current_metrics['position_distance'] = distance
-            current_metrics['normalized_distance'] = normalized_distance
-
-        # FEL指标惩罚计算
-        fel_weights = FEL_MODE_WEIGHTS.get(self.fel_mode, FEL_MODE_WEIGHTS['soft'])
-        intensity_penalty = 0.0
-        gaussian_penalty = 0.0
-
-        if fel_weights['intensity'] > 0 and intensity is not None and np.isfinite(intensity) and intensity > 0:
-            # 使用对数刻度避免溢出，同时保持单调性
-            # intensity 越高，penalty 越低（越好）
-            if self.intensity_mode == 'sum':
-                # 总强度模式：最大化总强度，使用对数避免大数问题
-                intensity_penalty = 1.0 / (np.log1p(intensity) + 1e-10)
+                    if combined_size < target_min:
+                        deviation = target_min - combined_size
+                    else:
+                        deviation = combined_size - target_max
+                    size_score = deviation / max(target_max - target_min, 1)
             else:
-                # 默认max模式：peak intensity 已经是归一化后的值
-                intensity_penalty = 1.0 / (intensity + 1e-10)
+                # 默认最小化模式
+                size_score = combined_size
 
-        if fel_weights['gaussian'] > 0 and gaussian_residual is not None and np.isfinite(gaussian_residual):
-            # 高斯残差越小越好
-            gaussian_penalty = gaussian_residual
+            # 圆度惩罚
+            non_roundness_penalty = combined_size * (1 - roundness)
 
-        # 综合评分
-        score = (w['size'] * size_score
-                 + w['roundness'] * non_roundness_penalty
-                 + w['position'] * position_penalty
-                 + fel_weights['intensity'] * intensity_penalty
-                 + fel_weights['gaussian'] * gaussian_penalty)
+            # 位置惩罚（默认启用）
+            position_penalty = 0.0
+            if self.maintain_position:
+                dx = centroid_x - self.initial_centroid_x
+                dy = centroid_y - self.initial_centroid_y
+                distance = np.sqrt(dx**2 + dy**2)
+                img_width, img_height = self.camera_shape
+                img_diagonal = np.sqrt(img_width**2 + img_height**2)
+                normalized_distance = distance / img_diagonal
+                position_penalty = combined_size * normalized_distance * 100
+                current_metrics['position_distance'] = distance
+                current_metrics['normalized_distance'] = normalized_distance
 
-        metrics.update(current_metrics, score)
+            # FEL指标惩罚计算
+            fel_weights = FEL_MODE_WEIGHTS.get(self.fel_mode, FEL_MODE_WEIGHTS['soft'])
+            intensity_penalty = 0.0
+            gaussian_penalty = 0.0
 
-        # 6. 检测光斑变化，计算影响并更新步长
-        if self._step_manager is not None and self._last_params is not None:
-            self._check_spot_velocity_and_adjust_steps(params, device_pvs, current_metrics)
+            if fel_weights['intensity'] > 0 and intensity is not None and np.isfinite(intensity) and intensity > 0:
+                # 使用对数刻度避免溢出，同时保持单调性
+                # intensity 越高，penalty 越低（越好）
+                if self.intensity_mode == 'sum':
+                    # 总强度模式：最大化总强度，使用对数避免大数问题
+                    intensity_penalty = 1.0 / (np.log1p(intensity) + 1e-10)
+                else:
+                    # 默认max模式：peak intensity 已经是归一化后的值
+                    intensity_penalty = 1.0 / (intensity + 1e-10)
 
-        # 7. 更新步长管理器阶段
-        if self._step_manager is not None:
-            self._step_manager.update_phase(score)
+            if fel_weights['gaussian'] > 0 and gaussian_residual is not None and np.isfinite(gaussian_residual):
+                # 高斯残差越小越好
+                gaussian_penalty = gaussian_residual
 
-        # 记录当前状态供下次比较
-        self._last_params = params.copy()
-        self._last_centroid = (centroid_x, centroid_y)
-        self._last_metrics = current_metrics.copy()
+            # 综合评分
+            score = (w['size'] * size_score
+                     + w['roundness'] * non_roundness_penalty
+                     + w['position'] * position_penalty
+                     + fel_weights['intensity'] * intensity_penalty
+                     + fel_weights['gaussian'] * gaussian_penalty)
 
-        return score
+            metrics.update(current_metrics, score)
+
+            # 6. 检测光斑变化，计算影响并更新步长
+            if self._step_manager is not None and self._last_params is not None:
+                self._check_spot_velocity_and_adjust_steps(params, device_pvs, current_metrics)
+
+            # 7. 更新步长管理器阶段
+            if self._step_manager is not None:
+                self._step_manager.update_phase(score)
+
+            # 记录当前状态供下次比较
+            self._last_params = params.copy()
+            self._last_centroid = (centroid_x, centroid_y)
+            self._last_metrics = current_metrics.copy()
+
+            return score
+
+        except KeyboardInterrupt:
+            self.rollback_to_initial()
+            raise
 
     def _compute_influence(self, before_metrics, after_metrics, param_changes):
         """计算综合影响值

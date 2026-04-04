@@ -78,55 +78,67 @@ class OrbitObjective(BaseObjective):
         Returns:
             float: 轨道偏移评分（越小越好）
         """
-        # 1. 安全设置设备参数
-        success = safe_device_operation(device_pvs, params, self.config)
-        if not success:
-            return float('inf')
+        # 保存初始值用于回滚（首次调用时）
+        if not self._params_saved:
+            from ..utils import get_current_values
+            self._initial_device_pvs = device_pvs.copy()
+            self._initial_device_values = get_current_values(device_pvs)
+            self._params_saved = True
 
-        # 2. 检查硬件调整间隔
-        elapsed = time.time() - self._last_adjust_time
-        if elapsed < self.min_adjust_interval:
-            wait_time = self.min_adjust_interval - elapsed
-            print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
-            time.sleep(wait_time)
+        try:
+            # 1. 安全设置设备参数
+            success = safe_device_operation(device_pvs, params, self.config, tolerance=self.tolerance)
+            if not success:
+                return float('inf')
 
-        # 3. 轮询等待所有元件达到设定值
-        from ..utils import wait_for_all_devices_settled
-        success, failed_devs = wait_for_all_devices_settled(
-            device_pvs, params,
-            tolerance=self.tolerance,
-            max_wait=self.max_wait,
-            poll_interval=self.poll_interval
-        )
+            # 2. 检查硬件调整间隔
+            elapsed = time.time() - self._last_adjust_time
+            if elapsed < self.min_adjust_interval:
+                wait_time = self.min_adjust_interval - elapsed
+                print(f"  等待硬件调整间隔: {wait_time:.1f}秒")
+                time.sleep(wait_time)
 
-        if not success:
-            error_msg = "错误: 以下元件写入失败:\n"
-            for pv, info in failed_devs.items():
-                if info['deviation'] is not None:
-                    error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.6f}\n"
-                else:
-                    error_msg += f"  - {pv}: 读取失败\n"
-            error_msg += "请处理上述问题，优化将回滚到初始参数。"
-            from core.optimizer import OptimizationError
-            raise OptimizationError(error_msg)
+            # 3. 轮询等待所有元件达到设定值
+            from ..utils import wait_for_all_devices_settled
+            success, failed_devs = wait_for_all_devices_settled(
+                device_pvs, params,
+                tolerance=self.tolerance,
+                max_wait=self.max_wait,
+                poll_interval=self.poll_interval
+            )
 
-        self._last_adjust_time = time.time()
+            if not success:
+                error_msg = "错误: 以下元件写入失败:\n"
+                for pv, info in failed_devs.items():
+                    if info['deviation'] is not None:
+                        error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.6f}\n"
+                    else:
+                        error_msg += f"  - {pv}: 读取失败\n"
+                error_msg += "请处理上述问题，优化将回滚到初始参数。"
+                from core.optimizer import OptimizationError
+                raise OptimizationError(error_msg)
 
-        # 4. 获取BPM读数（多次采样平均）
-        bpm_readings = self._get_bpm_readings()
+            self._last_adjust_time = time.time()
 
-        # 5. 计算增强评分
-        score = self._compute_enhanced_score(bpm_readings)
+            # 4. 获取BPM读数（多次采样平均）
+            bpm_readings = self._get_bpm_readings()
 
-        # 更新指标
-        current_metrics = {
-            'orbit_score': score,
-            'bpm_readings': bpm_readings,
-            'params': params.copy()
-        }
-        metrics.update(current_metrics, score)
+            # 5. 计算增强评分
+            score = self._compute_enhanced_score(bpm_readings)
 
-        return score
+            # 更新指标
+            current_metrics = {
+                'orbit_score': score,
+                'bpm_readings': bpm_readings,
+                'params': params.copy()
+            }
+            metrics.update(current_metrics, score)
+
+            return score
+
+        except KeyboardInterrupt:
+            self.rollback_to_initial()
+            raise
 
     def _compute_enhanced_score(self, bpm_readings):
         """计算增强评分
@@ -139,7 +151,8 @@ class OrbitObjective(BaseObjective):
         Returns:
             float: 增强评分
         """
-        diff = np.array(bpm_readings) - np.array(self.reference_orbit)
+        ref_values = [self.reference_orbit.get(pv, 0.0) for pv in self.bpm_pvs]
+        diff = np.array(bpm_readings) - np.array(ref_values)
 
         # RMS：整体偏差均方根
         rms = np.sqrt(np.mean(diff**2))

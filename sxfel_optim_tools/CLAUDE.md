@@ -134,7 +134,7 @@ python run_optimization.py --config config.json --simulator
 | `num_averages` / `num_bpm_averages` | 采样平均次数 | 3/5 |
 | `min_adjust_interval` | 校正子最小调整间隔（秒），硬件限制 | 6 |
 | `poll_interval` | 轮询间隔（秒） | 0.2 |
-| `tolerance` | 设定值容差 | 0.0001 |
+| `tolerance` | 设定值容差（同时用于 safe_device_operation 和 wait_for_all_devices_settled） | 0.0001 |
 | `max_wait` | 最大等待时间（秒） | 10 |
 
 ### 束流优化配置
@@ -170,6 +170,15 @@ python run_optimization.py --config config.json --simulator
 - **`core/step_manager.py`**：`StepManager` 自适应步长管理器，根据迭代阶段和光斑移动速度动态调整步长
 - **`core/utils.py`**：`load_config`, `safe_device_operation`, `select_optimization_devices`, `wait_for_all_devices_settled`
 
+### 中断处理与回滚
+
+优化过程中支持键盘中断（Ctrl+C），会自动回滚到初始参数：
+
+- 首次评估前自动保存设备初始值
+- 检测到 `KeyboardInterrupt` 时自动触发回滚
+- 回滚使用 `safe_device_operation` 确保恢复成功
+- 基类 `BaseObjective` 提供 `rollback_to_initial()` 方法
+
 ## 评分公式
 
 **束流优化**：
@@ -185,11 +194,24 @@ score = RMS + α×Peak + β×Roughness + γ×Coupling + δ×Skew
 ```
 其中权重由 `mode`（smooth/balanced/aggressive）控制。
 
-## 已知问题
+## 结果保存
 
-- `core/epics_backend.py` 的 `EPICSBackend` 单例模式存在线程安全问题（`_use_simulator` 是类变量）
-- 核心模块（objectives、optimizer、epics_backend 等）缺乏单元测试
-- `beam.py` 中存在部分代码重复（`optimize_beam()` 与 `BeamObjective.get_score()`）
+优化结果自动保存为 HDF5 格式：
+- 路径：`results/beam_YYYYMMDD_HHMMSS.h5` 或 `results/orbit_YYYYMMDD_HHMMSS.h5`
+- 使用 `tools/plot_results.py` 可视化
+
+```bash
+# 交互式选择文件并可视化
+python tools/plot_results.py
+```
+
+## UI 模块架构
+
+Web UI 使用 Gradio 框架：
+- `ui/beam_app.py` - 束流优化界面
+- `ui/orbit_app.py` - 轨道优化界面
+- `ui/theme.py` - 主题配置
+- `ui/components/` - 通用组件
 
 ## 新增目标函数
 

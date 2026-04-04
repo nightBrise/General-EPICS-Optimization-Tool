@@ -113,7 +113,11 @@ def safe_clamp_value(value, bounds):
         float: 限制后的值
     """
     if value is None:
-        return (bounds[0] + bounds[1]) / 2
+        if bounds[0] <= bounds[1]:
+            return (bounds[0] + bounds[1]) / 2
+        else:
+            print(f"警告: 无效的边界 {bounds}，返回 0")
+            return 0.0
 
     lower, upper = bounds
     if value < lower:
@@ -151,7 +155,7 @@ def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
     for i in range(len(values)):
         if i < len(device_ranges):
             bounds = device_ranges[i]
-            if not (np.isinf(bounds[0]) and np.isinf(bounds[1])):
+            if not (np.isinf(bounds[0]) or np.isinf(bounds[1])):
                 values_to_use[i] = safe_clamp_value(values_to_use[i], bounds)
 
     # 设置设备参数
@@ -231,10 +235,9 @@ def _get_device_ranges(pvs, config):
             if not found:
                 current_val = caget(pv, timeout=1.0)
                 if current_val is not None and np.abs(current_val) > 1e-6:
-                    lower_bound = current_val * 0.5
-                    upper_bound = current_val * 1.5
-                    if lower_bound > upper_bound:
-                        lower_bound, upper_bound = upper_bound, lower_bound
+                    abs_val = abs(current_val)
+                    lower_bound = -abs_val * 1.5
+                    upper_bound = abs_val * 1.5
                     device_ranges.append([lower_bound, upper_bound])
                 else:
                     device_ranges.append([-10.0, 10.0])
@@ -242,10 +245,9 @@ def _get_device_ranges(pvs, config):
         for pv in pvs:
             current_val = caget(pv, timeout=1.0)
             if current_val is not None and np.abs(current_val) > 1e-6:
-                lower_bound = current_val * 0.5
-                upper_bound = current_val * 1.5
-                if lower_bound > upper_bound:
-                    lower_bound, upper_bound = upper_bound, lower_bound
+                abs_val = abs(current_val)
+                lower_bound = -abs_val * 1.5
+                upper_bound = abs_val * 1.5
                 device_ranges.append([lower_bound, upper_bound])
             else:
                 device_ranges.append([-10.0, 10.0])
