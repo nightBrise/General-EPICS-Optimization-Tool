@@ -301,9 +301,7 @@ best_params, best_score, device_pvs, history = optimizer.run()
 | 类型 | 说明 | 文件 |
 |------|------|------|
 | `beam_size` | 束流尺寸优化 | `core/objectives/beam.py` |
-| `orbit` | 轨道优化（全0/参考） | `core/objectives/orbit_zero.py` |
-| `orbit_zero` | 轨道零点优化（兼容旧接口） | `core/objectives/orbit_zero.py` |
-| `orbit_ref` | 参考轨道优化（兼容旧接口） | `core/objectives/orbit_ref.py` |
+| `orbit` | 轨道优化（全0/参考） | `core/objectives/orbit.py` |
 
 ## 注意事项
 

@@ -52,8 +52,7 @@ sxfel_optim_tools/
 │   │   ├── base.py             # 基类 BaseObjective
 │   │   ├── registry.py         # @register_objective 注册表
 │   │   ├── beam.py             # 束流目标 (beam_size)
-│   │   ├── orbit_zero.py       # 零点轨道 (orbit_zero)
-│   │   ├── orbit_ref.py        # 参考轨道 (orbit_ref)
+│   │   ├── orbit.py            # 轨道优化 (orbit)
 │   │   └── metrics.py          # 线程安全指标追踪器
 │   ├── optimizer.py            # Nevergrad 封装
 │   ├── simulator.py            # EPICS 模拟器
@@ -120,7 +119,7 @@ python run_optimization.py --config config.json --simulator
 | 字段 | 说明 |
 |------|------|
 | `name` | 任务名称 |
-| `objective.type` | 目标函数类型（beam_size, orbit_zero, orbit_ref） |
+| `objective.type` | 目标函数类型（beam_size, orbit） |
 | `objective.read_pvs` | 读取的 EPICS PV 列表 |
 | `devices` | 设备配置（quadrupoles, correctors 等） |
 | `optimization.algorithm` | 算法（Compass, NGOpt, CMA, PSO） |
@@ -190,9 +189,16 @@ score = w_size × size_score + w_roundness × non_roundness_penalty + w_position
 
 **轨道优化**：
 ```
-score = RMS + α×Peak + β×Roughness + γ×Coupling + δ×Skew
+score = RMS + α×Peak + β×Roughness + δ×Skew
 ```
 其中权重由 `mode`（smooth/balanced/aggressive）控制。
+
+| 分量 | 说明 |
+|------|------|
+| RMS | 整体偏差均方根 |
+| Peak | 最大偏差 |
+| Roughness | 空间平滑性（相邻BPM偏差变化的标准差）|
+| Skew | 轨道倾斜度（入口到出口的线性倾斜）|
 
 ## 结果保存
 

@@ -10,14 +10,14 @@ from .base import BaseObjective
 from .registry import register_objective
 from .metrics import metrics
 from ..epics_backend import caget_many
-from ..utils import safe_device_operation
+from ..utils import safe_device_operation, get_current_values
 
 
 # 模式权重配置
 MODE_WEIGHTS = {
-    'smooth':     {'alpha': 0.2, 'beta': 0.4, 'gamma': 0.2, 'delta': 0.2},  # 强平滑
-    'balanced':   {'alpha': 0.3, 'beta': 0.2, 'gamma': 0.1, 'delta': 0.1},  # 平衡（默认）
-    'aggressive': {'alpha': 0.5, 'beta': 0.0, 'gamma': 0.0, 'delta': 0.0},  # 极简
+    'smooth':     {'alpha': 0.2, 'beta': 0.4, 'delta': 0.2},  # 强平滑
+    'balanced':   {'alpha': 0.3, 'beta': 0.2, 'delta': 0.1},  # 平衡（默认）
+    'aggressive': {'alpha': 0.5, 'beta': 0.0, 'delta': 0.0},  # 极简
 }
 
 
@@ -30,13 +30,13 @@ class OrbitObjective(BaseObjective):
     - 提供 reference_orbit：优化到指定参考轨道
 
     评分公式：
-    score = RMS + α×Peak + β×Roughness + γ×Coupling + δ×Skew
+    score = RMS + α×Peak + β×Roughness + δ×Skew
 
     分量说明：
     - RMS: 整体偏差均方根
     - Peak: 最大偏差
     - Roughness: 轨道空间平滑性
-    - Coupling: XY耦合度
+    - Skew: 轨道倾斜度
     - Skew: 轨道倾斜度
     """
 
@@ -65,6 +65,7 @@ class OrbitObjective(BaseObjective):
         self.poll_interval = self.params.get('poll_interval', 0.2)
         self.tolerance = self.params.get('tolerance', 0.0001)
         self.max_wait = self.params.get('max_wait', 10)
+        self.timeout = self.params.get('timeout', 5.0)
 
         self._last_adjust_time = 0
 
@@ -80,15 +81,16 @@ class OrbitObjective(BaseObjective):
         """
         # 保存初始值用于回滚（首次调用时）
         if not self._params_saved:
-            from ..utils import get_current_values
             self._initial_device_pvs = device_pvs.copy()
             self._initial_device_values = get_current_values(device_pvs)
             self._params_saved = True
 
         try:
             # 1. 安全设置设备参数
-            success = safe_device_operation(device_pvs, params, self.config, tolerance=self.tolerance)
+            success = safe_device_operation(device_pvs, params, self.config, tolerance=self.tolerance, timeout=self.timeout)
             if not success:
+                print("警告: safe_device_operation 失败，优化终止并回滚")
+                self.rollback_to_initial()
                 return float('inf')
 
             # 2. 检查硬件调整间隔
@@ -104,14 +106,16 @@ class OrbitObjective(BaseObjective):
                 device_pvs, params,
                 tolerance=self.tolerance,
                 max_wait=self.max_wait,
-                poll_interval=self.poll_interval
+                poll_interval=self.poll_interval,
+                timeout=self.timeout,
+                raise_on_timeout=False
             )
 
             if not success:
                 error_msg = "错误: 以下元件写入失败:\n"
                 for pv, info in failed_devs.items():
                     if info['deviation'] is not None:
-                        error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.6f}\n"
+                        error_msg += f"  - {pv}: 当前={info['current']:.4f}, 目标={info['target']:.4f}, 偏差={info['deviation']:.4f}\n"
                     else:
                         error_msg += f"  - {pv}: 读取失败\n"
                 error_msg += "请处理上述问题，优化将回滚到初始参数。"
@@ -121,15 +125,28 @@ class OrbitObjective(BaseObjective):
             self._last_adjust_time = time.time()
 
             # 4. 获取BPM读数（多次采样平均）
-            bpm_readings = self._get_bpm_readings()
+            try:
+                bpm_readings = self._get_bpm_readings()
+            except RuntimeError as e:
+                print(f"\n{e}")
+                print("正在回滚到初始参数...")
+                self.rollback_to_initial()
+                from core.optimizer import OptimizationError
+                raise OptimizationError("BPM读取失败，优化终止。")
 
             # 5. 计算增强评分
             score = self._compute_enhanced_score(bpm_readings)
+
+            # 计算 BPM 偏差（RMS）
+            ref_values = [self.reference_orbit.get(pv, 0.0) for pv in self.bpm_pvs]
+            diff = np.array(bpm_readings) - np.array(ref_values)
+            bpm_deviation = np.sqrt(np.mean(diff**2))
 
             # 更新指标
             current_metrics = {
                 'orbit_score': score,
                 'bpm_readings': bpm_readings,
+                'bpm_deviation': bpm_deviation,
                 'params': params.copy()
             }
             metrics.update(current_metrics, score)
@@ -161,15 +178,7 @@ class OrbitObjective(BaseObjective):
         peak = np.max(np.abs(diff))
 
         # Roughness：相邻BPM偏差变化的标准差（空间平滑性）
-        roughness = np.std(np.diff(diff)) if len(diff) > 1 else 0.0
-
-        # Coupling：X和Y偏差的相关系数
-        x_devs = diff[::2]   # X偏差
-        y_devs = diff[1::2]  # Y偏差
-        if len(x_devs) > 1 and len(y_devs) > 1:
-            coupling = abs(np.corrcoef(x_devs, y_devs)[0, 1])
-        else:
-            coupling = 0.0
+        roughness = np.std(np.diff(diff)) if len(diff) > 1 else float('nan')
 
         # Skew：入口到出口的线性倾斜
         skew = abs(diff[-1] - diff[0]) if len(diff) > 1 else 0.0
@@ -178,27 +187,70 @@ class OrbitObjective(BaseObjective):
         mode = self.params.get('mode', 'balanced')
         w = MODE_WEIGHTS.get(mode, MODE_WEIGHTS['balanced'])
 
+        # 处理 roughness 为 NaN 的情况
+        roughness_val = 0.0 if np.isnan(roughness) else roughness
+
         # 综合评分
         score = (rms
                  + w['alpha'] * peak
-                 + w['beta'] * roughness
-                 + w['gamma'] * coupling * rms  # coupling乘以rms归一化
+                 + w['beta'] * roughness_val
                  + w['delta'] * skew)
 
         return score
 
-    def _get_bpm_readings(self):
-        """获取所有BPM的轨道读数（多次采样平均）"""
+    def _get_bpm_readings(self, retries=3, retry_interval=1.0):
+        """获取所有BPM的轨道读数（多次采样平均）
+
+        Args:
+            retries: 读取失败时的重试次数
+            retry_interval: 重试间隔（秒）
+
+        Returns:
+            list: BPM读数列表
+
+        Raises:
+            RuntimeError: BPM读取持续失败
+        """
         if not self.bpm_pvs:
             return [0.0] * 10
 
         # 采样间隔 = 1/重复频率
         sample_interval = 1.0 / self.repetition_rate
 
-        all_readings = []
-        for _ in range(self.num_bpm_averages):
+        # 首先确保读取成功（最多重试 retries 次）
+        for attempt_idx in range(retries + 1):
             readings = caget_many(self.bpm_pvs)
-            all_readings.append([r if r is not None else 0.0 for r in readings])
+
+            # 检查是否有 None
+            none_pvs = [pv for pv, r in zip(self.bpm_pvs, readings) if r is None]
+            if none_pvs:
+                if attempt_idx < retries:
+                    print(f"  警告: {len(none_pvs)}/{len(self.bpm_pvs)} 个BPM返回None，第{attempt_idx+1}次重试...")
+                    time.sleep(retry_interval)
+                else:
+                    # 所有重试都失败
+                    error_msg = f"错误: BPM读取失败，以下BPM持续返回None:\n"
+                    for pv in none_pvs:
+                        error_msg += f"  - {pv}\n"
+                    error_msg += "请检查BPM状态和网络连接。"
+                    raise RuntimeError(error_msg)
+            else:
+                # 读取成功，跳出重试循环
+                break
+
+        # 读取成功后，进行多次采样平均
+        all_readings = [readings]  # 第一次读取的结果
+        for _ in range(1, self.num_bpm_averages):
+            readings = caget_many(self.bpm_pvs)
+            # 检查是否有 None
+            none_pvs = [pv for pv, r in zip(self.bpm_pvs, readings) if r is None]
+            if none_pvs:
+                error_msg = f"错误: 以下BPM持续返回None:\n"
+                for pv in none_pvs:
+                    error_msg += f"  - {pv}\n"
+                error_msg += "请检查BPM状态和网络连接。"
+                raise RuntimeError(error_msg)
+            all_readings.append(readings)
             time.sleep(sample_interval)
 
         return np.mean(all_readings, axis=0).tolist()
@@ -219,10 +271,3 @@ class OrbitObjective(BaseObjective):
         reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
         orbit_mode = 'ref' if reference_orbit else 'zero'
         return save_orbit(history, config, results_dir, orbit_mode=orbit_mode)
-
-
-# 兼容旧名称
-@register_objective("orbit_zero")
-class OrbitZeroObjective(OrbitObjective):
-    """轨道零点优化目标函数（兼容旧接口）"""
-    pass

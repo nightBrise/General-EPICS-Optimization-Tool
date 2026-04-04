@@ -8,14 +8,13 @@ from .metrics import metrics, MetricsTracker
 
 # 导入并注册目标函数
 from .beam import BeamObjective, optimize_beam, save_optimization_results
-from .orbit_zero import OrbitObjective, OrbitZeroObjective
+from .orbit import OrbitObjective
 
 # 导出公共接口
 __all__ = [
     'BaseObjective',
     'BeamObjective',
     'OrbitObjective',
-    'OrbitZeroObjective',
     'optimize_beam',
     'save_optimization_results',
     'create_objective',

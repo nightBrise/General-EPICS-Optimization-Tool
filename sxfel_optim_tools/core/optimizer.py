@@ -229,7 +229,7 @@ class Optimizer:
                         best_size = best_metrics.get('size_x', 0)
                         best_roundness = best_metrics.get('roundness', 0)
                         tqdm.write(f"  最佳: 尺寸=({best_size:.1f}, ...), 圆度={best_roundness:.3f}, Score={best_score_so_far:.4f}")
-                elif obj_type in ['orbit', 'orbit_zero', 'orbit_ref']:
+                elif obj_type == 'orbit':
                     bpm_dev = current_metrics.get('bpm_deviation', 0)
                     tqdm.write(f"  当前: BPM偏差={bpm_dev:.4f}mm, Score={value:.4f}")
                     best_metrics = metrics.get_best()

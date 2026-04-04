@@ -57,8 +57,8 @@ def validate_optimization_config(config, objective_type):
             warnings.append("未配置图像尺寸")
 
     # 轨道优化特定检查
-    if objective_type in ['orbit', 'orbit_zero', 'orbit_ref', 'orbit_zero']:
-        bpm_pvs = config.get('bpm_pvs', [])
+    if objective_type == 'orbit':
+        bpm_pvs = config.get('objective', {}).get('read_pvs', config.get('bpm_pvs', []))
         if not bpm_pvs:
             warnings.append("未配置 BPM PV 列表")
 
@@ -129,7 +129,7 @@ def safe_clamp_value(value, bounds):
     return value
 
 
-def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
+def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3, timeout=5.0):
     """安全地设置设备参数，验证设置结果
 
     Args:
@@ -138,6 +138,7 @@ def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
         config: 配置字典（可选）
         retries: 设置失败时的重试次数
         tolerance: 值验证的允许误差
+        timeout: EPICS操作超时时间（秒）
 
     Returns:
         bool: 操作是否成功
@@ -162,13 +163,13 @@ def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
     for i, (pv, value) in enumerate(zip(pvs, values_to_use)):
         success = False
         bounds = device_ranges[i]
+        readback = None
 
         for attempt in range(retries + 1):
             try:
-                caput(pv, value, wait=True)
-                time.sleep(0.1)
+                caput(pv, value, wait=True, timeout=timeout)
 
-                readback = caget(pv)
+                readback = caget(pv, timeout=timeout)
                 if readback is None:
                     print(f"警告: {pv} 设置后无法读取")
                 else:
@@ -194,9 +195,9 @@ def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
         if not success:
             print(f"错误: {pv} 设置失败")
             if attempt > 0 and readback is not None:
-                orig_value = caget(pv)
+                orig_value = caget(pv, timeout=timeout)
                 if orig_value is not None:
-                    caput(pv, orig_value, wait=True)
+                    caput(pv, orig_value, wait=True, timeout=timeout)
             return False
 
     # 最终验证
@@ -204,7 +205,7 @@ def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
     all_verified = True
     for pv, value in zip(pvs, values_to_use):
         try:
-            readback = caget(pv)
+            readback = caget(pv, timeout=timeout)
             if readback is None:
                 print(f"  警告: 无法验证 {pv}")
                 all_verified = False
@@ -214,7 +215,7 @@ def safe_device_operation(pvs, values, config=None, retries=3, tolerance=1e-3):
         except Exception:
             all_verified = False
 
-    return True
+    return all_verified
 
 
 def _get_device_ranges(pvs, config):
@@ -553,7 +554,7 @@ def compute_gaussian_residual(image, centroid_x, centroid_y, size_x, size_y):
         return float('inf')
 
 
-def wait_for_all_devices_settled(device_pvs, target_values, tolerance=0.0001, max_wait=10, poll_interval=0.2):
+def wait_for_all_devices_settled(device_pvs, target_values, tolerance=0.0001, max_wait=10, poll_interval=0.2, timeout=5.0, raise_on_timeout=True):
     """等待所有设备达到设定值
 
     Args:
@@ -562,16 +563,19 @@ def wait_for_all_devices_settled(device_pvs, target_values, tolerance=0.0001, ma
         tolerance: 允许的偏差（默认0.0001）
         max_wait: 最大等待时间（秒，默认10）
         poll_interval: 轮询间隔（秒，默认0.2）
+        timeout: EPICS操作超时时间（秒）
+        raise_on_timeout: 超时时是否抛出异常（默认True）
 
     Returns:
         tuple: (是否全部成功, {pv: {target, current, deviation}} 字典)
+            - 如果 raise_on_timeout=True，超时时直接抛出 TimeoutError
     """
     start_time = time.time()
 
     while True:
         elapsed = time.time() - start_time
         if elapsed > max_wait:
-            readbacks = caget_many(device_pvs)
+            readbacks = caget_many(device_pvs, timeout=timeout)
             failed = {}
             for pv, target, readback in zip(device_pvs, target_values, readbacks):
                 if readback is None or abs(readback - target) > tolerance:
@@ -580,9 +584,11 @@ def wait_for_all_devices_settled(device_pvs, target_values, tolerance=0.0001, ma
                         'current': readback,
                         'deviation': abs(readback - target) if readback is not None else None
                     }
+            if raise_on_timeout:
+                raise TimeoutError(f"设备等待超时: {failed}")
             return False, failed
 
-        readbacks = caget_many(device_pvs)
+        readbacks = caget_many(device_pvs, timeout=timeout)
         all_settled = True
         deviations = {}
 

@@ -27,7 +27,7 @@
 ### 评分公式
 
 ```
-score = RMS + α×Peak + β×Roughness + γ×Coupling + δ×Skew
+score = RMS + α×Peak + β×Roughness + δ×Skew
 ```
 
 | 分量 | 含义 | 说明 |
@@ -35,20 +35,19 @@ score = RMS + α×Peak + β×Roughness + γ×Coupling + δ×Skew
 | RMS | 整体偏差均方根 | `sqrt(mean((bpm_reading - target)²))`，反映整体轨道质量 |
 | Peak | 最大偏差 | `max(|bpm_reading - target|)`，防止局部最差点失控 |
 | Roughness | 轨道平滑性 | 相邻 BPM 偏差变化的标准差，避免轨道剧烈振荡 |
-| Coupling | XY耦合度 | X 和 Y 偏差的相关系数，反映束流扭曲程度 |
 | Skew | 轨道倾斜度 | 入口到出口 BPM 偏差的线性倾斜 |
 
 ### 权重模式
 
 通过 `objective.params.mode` 选择评分模式：
 
-| 模式 | α (RMS) | β (Peak) | γ (Roughness) | δ (Coupling+Skew) | 适用场景 |
-|------|---------|----------|---------------|-------------------|---------|
-| `smooth` | 0.2 | 0.4 | 0.2 | 0.2 | 追求轨道平滑稳定 |
-| `balanced` | 0.3 | 0.2 | 0.1 | 0.1 | 平衡精度与平滑（默认） |
-| `aggressive` | 0.5 | 0.0 | 0.0 | 0.0 | 追求极致精度 |
+| 模式 | α (Peak) | β (Roughness) | δ (Skew) | 适用场景 |
+|------|----------|---------------|----------|---------|
+| `smooth` | 0.2 | 0.4 | 0.2 | 追求轨道平滑稳定 |
+| `balanced` | 0.3 | 0.2 | 0.1 | 平衡精度与平滑（默认） |
+| `aggressive` | 0.5 | 0.0 | 0.0 | 追求极致精度 |
 
-> 注：aggressive 模式中 β=0 表示忽略峰值惩罚，可能导致局部最差点失控。
+> 注：aggressive 模式中 β=0 表示忽略平滑性惩罚，可能导致轨道振荡。
 
 ### 配置示例
 
@@ -178,7 +177,7 @@ python run_optimization.py --config config_orbit.json --mode ref --budget 50
 
 ```python
 if args.mode is not None:
-    if obj_type in ['orbit', 'orbit_zero']:
+    if obj_type == 'orbit':
         if args.mode == 'zero':
             # 清空参考轨道，优化到全0
             config['objective']['params']['reference_orbit'] = {}
@@ -192,7 +191,7 @@ if args.mode is not None:
 
 ## 目标函数实现
 
-参考: [core/objectives/orbit_zero.py](../../core/objectives/orbit_zero.py)
+参考: [core/objectives/orbit.py](../../core/objectives/orbit.py)
 
 `OrbitObjective` 类核心逻辑：
 
@@ -236,18 +235,40 @@ def get_score(self, params, device_pvs):
     return score
 ```
 
-### BPM 采样逻辑
+### BPM 采样与错误处理
 
 ```python
-def _get_bpm_readings(self):
-    """获取所有BPM的轨道读数（多次采样平均）"""
-    # 采样间隔 = 1/重复频率
+def _get_bpm_readings(self, retries=3, retry_interval=1.0):
+    """获取所有BPM的轨道读数（多次采样平均）
+
+    特点：
+    - 首次读取失败时自动重试（最多 retries 次）
+    - 采样过程中如果某BPM持续返回None，抛出 RuntimeError 中断优化
+    - 返回所有采样点的平均值
+    """
     sample_interval = 1.0 / self.repetition_rate
 
-    all_readings = []
-    for _ in range(self.num_bpm_averages):
+    # 首先确保首次读取成功（最多重试 retries 次）
+    for attempt_idx in range(retries + 1):
         readings = caget_many(self.bpm_pvs)
-        all_readings.append([r if r is not None else 0.0 for r in readings])
+        none_pvs = [pv for pv, r in zip(self.bpm_pvs, readings) if r is None]
+        if none_pvs:
+            if attempt_idx < retries:
+                print(f"  警告: {len(none_pvs)}/{len(self.bpm_pvs)} 个BPM返回None，第{attempt_idx+1}次重试...")
+                time.sleep(retry_interval)
+            else:
+                raise RuntimeError(f"错误: BPM读取失败，以下BPM持续返回None: {none_pvs}")
+        else:
+            break
+
+    # 读取成功后，进行多次采样平均
+    all_readings = [readings]
+    for _ in range(1, self.num_bpm_averages):
+        readings = caget_many(self.bpm_pvs)
+        none_pvs = [pv for pv, r in zip(self.bpm_pvs, readings) if r is None]
+        if none_pvs:
+            raise RuntimeError(f"错误: 以下BPM持续返回None: {none_pvs}")
+        all_readings.append(readings)
         time.sleep(sample_interval)
 
     return np.mean(all_readings, axis=0).tolist()

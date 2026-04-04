@@ -78,28 +78,6 @@
     "LA-BI:SBPM10:POS_X",
     "LA-BI:SBPM10:POS_Y"
   ],
-  "reference_orbit": {
-    "LA-BI:SBPM1:POS_X": 0.0,
-    "LA-BI:SBPM1:POS_Y": 0.0,
-    "LA-BI:SBPM2:POS_X": 0.0,
-    "LA-BI:SBPM2:POS_Y": 0.0,
-    "LA-BI:SBPM3:POS_X": 0.0,
-    "LA-BI:SBPM3:POS_Y": 0.0,
-    "LA-BI:SBPM4:POS_X": 0.0,
-    "LA-BI:SBPM4:POS_Y": 0.0,
-    "LA-BI:SBPM5:POS_X": 0.0,
-    "LA-BI:SBPM5:POS_Y": 0.0,
-    "LA-BI:SBPM6:POS_X": 0.0,
-    "LA-BI:SBPM6:POS_Y": 0.0,
-    "LA-BI:SBPM7:POS_X": 0.0,
-    "LA-BI:SBPM7:POS_Y": 0.0,
-    "LA-BI:SBPM8:POS_X": 0.0,
-    "LA-BI:SBPM8:POS_Y": 0.0,
-    "LA-BI:SBPM9:POS_X": 0.0,
-    "LA-BI:SBPM9:POS_Y": 0.0,
-    "LA-BI:SBPM10:POS_X": 0.0,
-    "LA-BI:SBPM10:POS_Y": 0.0
-  },
   "optimization": {
     "algorithm": "Compass",
     "budget": 50,

@@ -100,6 +100,43 @@ def print_beam_optimization_info(config, args):
     print("=" * 60 + "\n")
 
 
+def select_orbit_mode_interactive(config):
+    """交互式选择轨道优化模式
+
+    Args:
+        config: 配置字典
+
+    Returns:
+        str: 'zero' 或 'ref'
+    """
+    print("\n" + "=" * 60)
+    print("轨道优化模式选择")
+    print("=" * 60)
+
+    reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
+
+    print("\n请选择优化模式:")
+    print("  1) 全0轨道优化 - 将所有BPM读数优化到0")
+    print("  2) 参考轨道优化 - 将所有BPM读数优化到参考轨道")
+
+    if reference_orbit:
+        print(f"\n提示: 配置文件中已配置参考轨道 ({len(reference_orbit)} 个PV)")
+        print("提示: 如果选择模式2，将使用配置文件中的参考轨道")
+
+    while True:
+        choice = input("\n请输入选择 (1/2): ").strip()
+        if choice == '1':
+            return 'zero'
+        elif choice == '2':
+            if not reference_orbit:
+                print("\n错误: 参考轨道模式需要配置参考轨道")
+                print("请在配置文件的 objective.params.reference_orbit 中设置参考轨道值")
+                sys.exit(1)
+            return 'ref'
+        else:
+            print("无效选择，请输入 1 或 2")
+
+
 def print_orbit_optimization_info(config, args, orbit_mode):
     """打印轨道优化配置详细信息"""
     print("\n" + "=" * 60)
@@ -112,7 +149,7 @@ def print_orbit_optimization_info(config, args, orbit_mode):
     print(f"目标: 使所有 BPM 读数接近 {mode_desc}")
 
     # BPM 配置
-    bpm_pvs = config.get('bpm_pvs', [])
+    bpm_pvs = config.get('objective', {}).get('read_pvs', config.get('bpm_pvs', []))
     bpm_count = len(bpm_pvs) // 2 if bpm_pvs else 0
     print(f"\nBPM 配置:")
     print(f"  BPM 数量: {bpm_count} 个")
@@ -160,7 +197,7 @@ def print_orbit_optimization_info(config, args, orbit_mode):
     tolerance = obj_params.get('tolerance', 0.0001)
     max_wait = obj_params.get('max_wait', 10)
 
-    print(f"\n束流参数:")
+    print(f"\n采样参数:")
     print(f"  重复频率: {rep_rate} Hz")
     print(f"  BPM采样次数: {num_avg} 次")
     print(f"  BPM采样间隔: {sample_interval:.3f} 秒")
@@ -226,29 +263,31 @@ def main():
     config = load_config(args.config)
 
     # 处理轨道优化模式
-    if args.mode is not None:
-        obj_type = config.get('objective', {}).get('type', '')
-        if obj_type in ['orbit', 'orbit_zero']:
-            if args.mode == 'zero':
-                # 清空参考轨道，优化到全0
-                if 'params' not in config['objective']:
-                    config['objective']['params'] = {}
-                config['objective']['params']['reference_orbit'] = {}
-                print("模式: 全0轨道优化")
-            elif args.mode == 'ref':
-                # 检查是否配置了参考轨道
-                reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
-                if not reference_orbit:
-                    print("错误: 参考轨道模式需要配置 reference_orbit")
-                    print("请在配置文件的 objective.params.reference_orbit 中设置参考轨道值")
-                    sys.exit(1)
-                print("模式: 参考轨道优化")
+    obj_type = config.get('objective', {}).get('type', '')
+    if obj_type == 'orbit':
+        if args.mode is None:
+            # 交互式选择模式
+            args.mode = select_orbit_mode_interactive(config)
+
+        if args.mode == 'zero':
+            # 清空参考轨道，优化到全0
+            if 'params' not in config['objective']:
+                config['objective']['params'] = {}
+            config['objective']['params']['reference_orbit'] = {}
+            print("模式: 全0轨道优化")
+        elif args.mode == 'ref':
+            # 检查是否配置了参考轨道
+            reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
+            if not reference_orbit:
+                print("错误: 参考轨道模式需要配置 reference_orbit")
+                print("请在配置文件的 objective.params.reference_orbit 中设置参考轨道值")
+                sys.exit(1)
+            print("模式: 参考轨道优化")
 
     # 显示配置信息（根据目标类型差异化显示）
-    obj_type = config.get('objective', {}).get('type', 'unknown')
     if obj_type == 'beam_size':
         print_beam_optimization_info(config, args)
-    elif obj_type in ['orbit', 'orbit_zero', 'orbit_ref']:
+    elif obj_type == 'orbit':
         reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
         orbit_mode = 'ref' if (reference_orbit and args.mode == 'ref') else 'zero'
         print_orbit_optimization_info(config, args, orbit_mode)
@@ -310,7 +349,7 @@ def main():
         # 保存可视化图片
         if obj_type == 'beam_size':
             plot_beam_results(history)
-        elif obj_type in ['orbit', 'orbit_zero', 'orbit_ref']:
+        elif obj_type == 'orbit':
             reference_orbit = config.get('objective', {}).get('params', {}).get('reference_orbit', {})
             orbit_mode = 'ref' if reference_orbit else 'zero'
             plot_orbit_results(history, orbit_mode)
