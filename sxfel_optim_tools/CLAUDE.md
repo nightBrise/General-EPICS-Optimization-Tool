@@ -133,7 +133,7 @@ python run_optimization.py --config config.json --simulator
 | `num_averages` / `num_bpm_averages` | 采样平均次数 | 3/5 |
 | `min_adjust_interval` | 校正子最小调整间隔（秒），硬件限制 | 6 |
 | `poll_interval` | 轮询间隔（秒） | 0.2 |
-| `tolerance` | 设定值容差（同时用于 safe_device_operation 和 wait_for_all_devices_settled） | 0.0001 |
+| `tolerance` | 设定值容差（同时用于 safe_device_operation 和 wait_for_all_devices_settled） | 0.001 |
 | `max_wait` | 最大等待时间（秒） | 10 |
 
 ### 束流优化配置

@@ -52,7 +52,7 @@
       "num_bpm_averages": 5,
       "min_adjust_interval": 6,
       "poll_interval": 0.2,
-      "tolerance": 0.0001,
+      "tolerance": 0.001,
       "max_wait": 10
     }
   },

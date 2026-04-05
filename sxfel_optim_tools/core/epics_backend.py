@@ -176,6 +176,12 @@ class EPICSBackend:
         else:
             epics = self._get_epics()
             epics.caput(pv, value, wait=wait, timeout=timeout)
+            # 写入后验证（确保真实EPICS环境下写入成功）
+            if wait:
+                time.sleep(0.05)
+                readback = epics.caget(pv, timeout=timeout)
+                if readback is None or abs(readback - value) > 0.001:
+                    return False
             return True
 
     def _caput_impl(self, pv: str, value, wait: bool = False, timeout: float = 1.0) -> bool:
@@ -185,6 +191,12 @@ class EPICSBackend:
         else:
             epics = self._get_epics()
             epics.caput(pv, value, wait=wait, timeout=timeout)
+            # 写入后验证（确保真实EPICS环境下写入成功）
+            if wait:
+                time.sleep(0.05)
+                readback = epics.caget(pv, timeout=timeout)
+                if readback is None or abs(readback - value) > 0.001:
+                    return False
             return True
 
     def caget_many(self, pvs: List[str], timeout: float = 1.0) -> List:

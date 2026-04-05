@@ -147,6 +147,7 @@ class OrbitObjective(BaseObjective):
                 'orbit_score': score,
                 'bpm_readings': bpm_readings,
                 'bpm_deviation': bpm_deviation,
+                'deviations': diff.tolist(),
                 'params': params.copy()
             }
             metrics.update(current_metrics, score)
