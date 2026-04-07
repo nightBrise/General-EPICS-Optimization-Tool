@@ -357,6 +357,7 @@ def load_orbit(filepath):
         history['budget'] = int(metadata.attrs.get('budget', 0))
         history['early_stop'] = bool(metadata.attrs.get('early_stop', False))
         history['stop_iteration'] = int(metadata.attrs.get('stop_iteration', 0))
+        history['timestamp'] = metadata.attrs.get('timestamp', '')
         orbit_mode = metadata.attrs.get('orbit_mode', 'zero')
 
         # devices - device_names 从 device_pvs 统一提取
