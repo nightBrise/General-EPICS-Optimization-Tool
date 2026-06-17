@@ -1,0 +1,83 @@
+// ==================================================
+//  轨道优化 — 全零模式（完整 SXFEL 配置）
+// ==================================================
+// 20 个校正子 → 10 个 BPM（共 20 个读数）
+// 评分: l2 均方根偏离
+// 运行: python run_optimization.py --config configs/orbit_full.json
+
+{
+    "name": "orbit_full",
+
+    // 20 个校正子（水平 CH + 垂直 CV）
+    "variables": [
+        {"pv": "LA-PS:CH00:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV00:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH01:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV01:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH02:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV02:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH03:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV03:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH04:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV04:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH05:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV05:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH06:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV06:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH07:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV07:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH08:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV08:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH09:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV09:SETI", "range": [-0.5, 0.5]}
+    ],
+
+    // 10 个 BPM × (X + Y) = 20 个目标 PV
+    "objectives": {
+        "groups": [{
+            "name": "orbit",
+            "weight": 1.0,
+            "pvs": [
+                {"pv": "LA-BI:SBPM1:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM1:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM2:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM2:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM3:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM3:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM4:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM4:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM5:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM5:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM6:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM6:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM7:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM7:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM8:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM8:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM9:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM9:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM10:POS_X", "target": 0.0},
+                {"pv": "LA-BI:SBPM10:POS_Y", "target": 0.0}
+            ],
+            "scoring": {"method": "l2"}
+        }],
+        "overall_scoring": "weighted_sum"
+    },
+
+    "optimization": {
+        "algorithm": "NGOpt",
+        "budget": 50,
+        "early_stopping": {
+            "enabled": true,
+            "patience": 10,
+            "min_relative_improvement": 0.005
+        }
+    },
+
+    "hardware": {
+        "tolerance": 0.001,
+        "max_wait": 10,
+        "poll_interval": 0.2,
+        "min_adjust_interval": 6
+    }
+}

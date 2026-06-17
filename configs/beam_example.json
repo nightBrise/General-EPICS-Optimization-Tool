@@ -1,0 +1,58 @@
+// ==================================================
+//  束流尺寸优化
+// ==================================================
+// 流程: caget → 1D flat(Fortran) → custom:beam_optimizer → float → l2 vs target
+// 模拟器和真实 EPICS 走完全相同的 transform 管道
+// 运行: python run_optimization.py --config configs/beam_example.json --simulator -y
+{
+    "name": "beam_optimization",
+
+    "variables": [
+        {"pv": "VAR:QUAD1", "range": [-1, 1]},
+        {"pv": "VAR:QUAD2", "range": [-1, 1]},
+        {"pv": "VAR:CORR_X", "range": [-0.5, 0.5]},
+        {"pv": "VAR:CORR_Y", "range": [-0.5, 0.5]}
+    ],
+
+    "objectives": {
+        "groups": [{
+            "name": "beam_quality",
+            "weight": 1.0,
+            "pvs": [{
+                "pv": "OBJ:IMAGE",
+                "target": 0.0,
+                "transform": [
+                    {"type": "average", "params": {"n": 3}},
+                    {"type": "custom:beam_optimizer",
+                     "params": {"shape": [256, 256], "order": "F"}}
+                ]
+            }],
+            "scoring": {"method": "l2"}
+        }],
+        "overall_scoring": "weighted_sum"
+    },
+
+    "optimization": {
+        "algorithm": "NGOpt",
+        "budget": 30,
+        "early_stopping": {"enabled": false}
+    },
+
+    "hardware": {
+        "min_adjust_interval": 0,
+        "tolerance": 0.1
+    },
+
+    "simulation": {
+        "function": "sphere",
+        "mode": "image",
+        "image": {
+            "shape": [256, 256],
+            "center_vars": [2, 3],
+            "size_vars": [0, 1],
+            "background": 10,
+            "amplitude": 5000,
+            "seed": 42
+        }
+    }
+}

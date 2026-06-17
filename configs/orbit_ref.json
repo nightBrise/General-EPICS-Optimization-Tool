@@ -1,0 +1,81 @@
+// ==================================================
+//  轨道优化 — 参考轨道模式
+// ==================================================
+// 与 orbit_full 相同的变量和目标 PV，但给每个 BPM 设定了参考轨道值
+// 运行: python run_optimization.py --config configs/orbit_ref.json
+
+{
+    "name": "orbit_ref",
+
+    "variables": [
+        {"pv": "LA-PS:CH00:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV00:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH01:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV01:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH02:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV02:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH03:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV03:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH04:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV04:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH05:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV05:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH06:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV06:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH07:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV07:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH08:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV08:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CH09:SETI", "range": [-0.5, 0.5]},
+        {"pv": "LA-PS:CV09:SETI", "range": [-0.5, 0.5]}
+    ],
+
+    // target 设置为参考轨道值（非 0），其余与 orbit_full 相同
+    "objectives": {
+        "groups": [{
+            "name": "orbit",
+            "weight": 1.0,
+            "pvs": [
+                {"pv": "LA-BI:SBPM1:POS_X",  "target": 0.5},
+                {"pv": "LA-BI:SBPM1:POS_Y",  "target": 0.3},
+                {"pv": "LA-BI:SBPM2:POS_X",  "target": 0.4},
+                {"pv": "LA-BI:SBPM2:POS_Y",  "target": 0.2},
+                {"pv": "LA-BI:SBPM3:POS_X",  "target": 0.3},
+                {"pv": "LA-BI:SBPM3:POS_Y",  "target": 0.1},
+                {"pv": "LA-BI:SBPM4:POS_X",  "target": 0.2},
+                {"pv": "LA-BI:SBPM4:POS_Y",  "target": 0.0},
+                {"pv": "LA-BI:SBPM5:POS_X",  "target": 0.1},
+                {"pv": "LA-BI:SBPM5:POS_Y",  "target": -0.1},
+                {"pv": "LA-BI:SBPM6:POS_X",  "target": 0.0},
+                {"pv": "LA-BI:SBPM6:POS_Y",  "target": -0.2},
+                {"pv": "LA-BI:SBPM7:POS_X",  "target": -0.1},
+                {"pv": "LA-BI:SBPM7:POS_Y",  "target": -0.3},
+                {"pv": "LA-BI:SBPM8:POS_X",  "target": -0.2},
+                {"pv": "LA-BI:SBPM8:POS_Y",  "target": -0.4},
+                {"pv": "LA-BI:SBPM9:POS_X",  "target": -0.3},
+                {"pv": "LA-BI:SBPM9:POS_Y",  "target": -0.5},
+                {"pv": "LA-BI:SBPM10:POS_X", "target": -0.4},
+                {"pv": "LA-BI:SBPM10:POS_Y", "target": -0.6}
+            ],
+            "scoring": {"method": "l2"}
+        }],
+        "overall_scoring": "weighted_sum"
+    },
+
+    "optimization": {
+        "algorithm": "NGOpt",
+        "budget": 50,
+        "early_stopping": {
+            "enabled": true,
+            "patience": 10,
+            "min_relative_improvement": 0.005
+        }
+    },
+
+    "hardware": {
+        "tolerance": 0.001,
+        "max_wait": 10,
+        "poll_interval": 0.2,
+        "min_adjust_interval": 6
+    }
+}
