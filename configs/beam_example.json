@@ -44,7 +44,7 @@
     },
 
     "simulation": {
-        "function": "sphere",
+        "function": "griewank",
         "mode": "image",
         "image": {
             "shape": [256, 256],

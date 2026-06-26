@@ -1,4 +1,5 @@
 """评分器注册表"""
+from __future__ import annotations
 from .base import Scorer
 
 SCORER_REGISTRY = {}

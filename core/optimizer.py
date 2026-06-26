@@ -1,80 +1,67 @@
-"""通用 EPICS 优化器
+"""通用 EPICS 优化器 — 编排层
 
 核心循环: ask → apply → read → score → tell → stop
+通过 core/algorithms/ 插件架构分发到各算法后端。
 """
-import sys
-import numpy as np
-import nevergrad as ng
+from __future__ import annotations
+import time
 
 try:
-    from tqdm import tqdm
+    import nevergrad
+    _HAS_NEVERGRAD = True
 except ImportError:
-    class tqdm:
-        """纯文本进度条（无 tqdm 依赖时启用）"""
-        def __init__(self, iterable, desc="", total=None, **_):
-            self.iterable = iterable
-            self.total = total or len(iterable)
-            self.desc = desc
-            self.n = 0
-
-        def __iter__(self):
-            for item in self.iterable:
-                yield item
-                self.n += 1
-                pct = self.n * 100 // self.total
-                bar = "█" * (pct // 2) + " " * (50 - pct // 2)
-                line = f"  {self.desc}: [{bar}] {self.n}/{self.total}"
-                sys.stdout.write(f"\r{line}")
-                sys.stdout.flush()
-            sys.stdout.write("\n")
-
-        @staticmethod
-        def write(msg):
-            sys.stdout.write(f"\r\033[K{msg}\n")
+    _HAS_NEVERGRAD = False
 
 from .epics_backend import caget_many, caget
 from .variable_manager import VariableManager
 from .hardware_controller import HardwareController
 from .scoring.registry import create_scorer
 from .transforms.registry import create_transform
+from .algorithms.registry import get_algorithm
+from .problem import OptimizationProblem
+from .history import History
+from .objective import ObjectiveFunction
+
+
+def _resolve_algorithm(algorithm_name, has_nevergrad):
+    # type: (str, bool) -> str
+    defaults = ('NGOpt' if has_nevergrad else 'differential_evolution')
+    return algorithm_name or defaults
 
 
 class GenericOptimizer:
-    """通用 EPICS 优化器"""
+    """通用 EPICS 优化器 — 编排"""
 
-    def __init__(self, config: dict):
-        """初始化优化器
-
-        Args:
-            config: 完整配置字典
-        """
+    def __init__(self, config):
+        # type: (dict) -> None
         self.config = config
 
         self.variable_mgr = VariableManager(config)
         self.hardware = HardwareController(config)
-        self._all_obj_pvs: list[str] = []
-        self._group_indices: list[list[int]] = []
 
-        self._parse_objectives(config.get('objectives', {}))
-
+        self.objective_groups = self._parse_objectives(
+            config.get('objectives', {}))
         self._build_pv_index()
+        aggregate_fn = self._weighted_sum_aggregate
+
+        self.problem = OptimizationProblem(
+            self.objective_groups, self._all_obj_pvs,
+            self._group_indices, aggregate_fn
+        )
 
         opt = config.get('optimization', {})
-        self.algorithm = opt.get('algorithm', 'NGOpt')
+        self.algorithm = _resolve_algorithm(
+            opt.get('algorithm', ''), _HAS_NEVERGRAD)
+        self.algorithm_params = opt.get('algorithm_params', {})
         self.budget = opt.get('budget', 50)
-        self.early_stop_config = opt.get('early_stopping', {})
 
-    def _parse_objectives(self, obj_config: dict) -> None:
-        """解析目标配置
-
-        Args:
-            obj_config: objectives 字段
-        """
+    def _parse_objectives(self, obj_config):
+        # type: (dict) -> list
         groups = obj_config.get('groups', [])
-        self.objective_groups = []
+        objective_groups = []
 
         for g in groups:
-            name = g.get('name', f"group_{len(self.objective_groups)}")
+            name = g.get('name', "group_{}".format(len(objective_groups)))
             weight = g.get('weight', 1.0)
             pvs_raw = g.get('pvs', [])
             scoring_config = g.get('scoring', {'method': 'l2'})
@@ -97,14 +84,15 @@ class GenericOptimizer:
                     targets.append(item.get('target', 0.0))
                     weights.append(item.get('weight', 1.0))
                     ranges.append(item.get('range', None))
-                    transforms.append(create_transform(item.get('transform')))
+                    transforms.append(
+                        create_transform(item.get('transform')))
 
             scorer = create_scorer(
                 scoring_config.get('method', 'l2'),
                 scoring_config.get('params', {})
             )
 
-            self.objective_groups.append({
+            objective_groups.append({
                 'name': name,
                 'weight': weight,
                 'pvs': pvs,
@@ -119,7 +107,10 @@ class GenericOptimizer:
         if overall == 'weighted_sum':
             self._aggregate = self._weighted_sum_aggregate
         else:
-            raise ValueError(f"不支持的总体评分方式: {overall}")
+            raise ValueError(
+                "\u4e0d\u652f\u6301\u7684\u603b\u4f53\u8bc4\u5206\u65b9\u5f0f: {}".format(overall))
+
+        return objective_groups
 
     def _weighted_sum_aggregate(self, group_scores, group_weights):
         total_w = sum(group_weights)
@@ -127,11 +118,8 @@ class GenericOptimizer:
             return float('inf')
         return sum(s * w for s, w in zip(group_scores, group_weights)) / total_w
 
-    def _build_pv_index(self) -> None:
-        """构建目标 PV 去重索引
-
-        解决多组引用同一个 PV 时的重复读取和索引偏移问题。
-        """
+    def _build_pv_index(self):
+        # type: () -> None
         seen = {}
         self._all_obj_pvs = []
         self._group_indices = []
@@ -145,195 +133,93 @@ class GenericOptimizer:
                 indices.append(seen[pv])
             self._group_indices.append(indices)
 
-    def _compute_score(self, readings: list) -> tuple:
-        """计算各组分评分和总体评分
+    @staticmethod
+    def _default_progress(iteration, score, best):
+        import sys
+        sys.stdout.write("\r  [{:3d}] \u5f53\u524d: {:.4f} \u6700\u4f73: {:.4f}{}".format(
+            iteration, score, best, ' ' * 10))
+        sys.stdout.flush()
 
-        Args:
-            readings: 所有目标 PV 的读数
+    def _compute_score(self, readings):
+        # type: (list) -> tuple
+        """兼容旧接口（run_optimization.py _read_current_values）"""
+        return self.problem.compute_score(readings, caget)
 
-        Returns:
-            tuple: (overall_score, list_of_group_scores)
-        """
-        group_scores = []
-        for g, indices in zip(self.objective_groups, self._group_indices):
-            grp_readings = []
-            for pi, (idx, tr) in enumerate(zip(indices, g['transforms'])):
-                raw = readings[idx]
-                if tr is not None:
-                    tlist = tr if isinstance(tr, list) else [tr]
-                    for t in tlist:
-                        raw = t(raw, pv_name=g['pvs'][pi], caget_fn=caget)
-                grp_readings.append(raw)
+    @property
+    def all_obj_pvs(self):
+        # type: () -> list[str]
+        return self.problem.all_obj_pvs
 
-            if any(r is None for r in grp_readings):
-                score = float('inf')
-            else:
-                score = g['scorer'](
-                    grp_readings, g['targets'], g['weights'], g['ranges']
-                )
-            group_scores.append(score)
-
-        overall = self._aggregate(
-            group_scores,
-            [g['weight'] for g in self.objective_groups]
-        )
-        return overall, group_scores
-
-    def run(self) -> dict:
-        """执行优化
-
-        Returns:
-            dict: 优化结果
-        """
+    def run(self):
+        # type: () -> dict
         var_mgr = self.variable_mgr
         initial_values = var_mgr.read_initial_values()
         var_mgr.initial_values = initial_values
         self.hardware.save_initial(var_mgr.pvs, initial_values)
 
-        # 验证变量 PV ranges
         for i, r in enumerate(var_mgr.ranges):
             if not (isinstance(r, (list, tuple)) and len(r) == 2):
                 raise ValueError(
-                    f"variables[{i}] ({var_mgr.pvs[i]}) range 无效: {r}")
+                    "variables[{}] ({}) range \u65e0\u6548: {}".format(
+                        i, var_mgr.pvs[i], r))
             try:
                 float(r[0]), float(r[1])
             except (TypeError, ValueError):
                 raise ValueError(
-                    f"variables[{i}] ({var_mgr.pvs[i]}) range 包含非数字: {r}")
+                    "variables[{}] ({}) range \u5305\u542b\u975e\u6570\u5b57: {}".format(
+                        i, var_mgr.pvs[i], r))
 
-        # Nevergrad 参数空间
-        parametrization = ng.p.Instrumentation(**{
-            f"x{i}": ng.p.Scalar(
-                init=initial_values[i],
-                lower=var_mgr.ranges[i][0],
-                upper=var_mgr.ranges[i][1]
-            )
-            for i in range(len(var_mgr))
-        })
+        # Fix 4: \u8fb9\u754c\u88c1\u526a
+        for i, val in enumerate(initial_values):
+            lo, hi = var_mgr.ranges[i]
+            if val < lo:
+                print("  \u8b66\u544a: {} \u521d\u59cb\u503c {:.4f} < \u4e0b\u754c {:.4f}\uff0c\u88c1\u526a\u5230 {:.4f}".format(
+                    var_mgr.pvs[i], val, lo, lo))
+                initial_values[i] = lo
+            elif val > hi:
+                print("  \u8b66\u544a: {} \u521d\u59cb\u503c {:.4f} > \u4e0a\u754c {:.4f}\uff0c\u88c1\u526a\u5230 {:.4f}".format(
+                    var_mgr.pvs[i], val, hi, hi))
+                initial_values[i] = hi
 
-        try:
-            optimizer_class = ng.optimizers.registry[self.algorithm]
-        except KeyError:
-            print(f"算法 {self.algorithm} 未找到，使用 NGOpt")
-            optimizer_class = ng.optimizers.NGOpt
+        # Fix 1: Nevergrad \u964d\u7ea7\u63d0\u9192
+        if self.algorithm in ('ngopt', 'cma') and not _HAS_NEVERGRAD:
+            print("  \u8b66\u544a: Nevergrad \u672a\u5b89\u88c5\uff0c{} \u7b97\u6cd5\u4e0d\u53ef\u7528\uff0c\u81ea\u52a8\u964d\u7ea7\u5230 differential_evolution".format(
+                self.algorithm))
+            self.algorithm = 'differential_evolution'
 
-        optimizer = optimizer_class(
-            parametrization=parametrization,
-            budget=self.budget,
-            num_workers=1,
-        )
+        history = History(
+            var_mgr.pvs, initial_values, self.algorithm, self.budget,
+            self.objective_groups, self._group_indices)
 
-        # 历史记录
-        history = {
-            'device_pvs': list(var_mgr.pvs),
-            'iterations': [],
-            'scores': [],
-            'group_scores': [],
-            'parameters': [initial_values],
-            'readings': [],
-            'algorithm': self.algorithm,
-            'budget': self.budget,
-            'early_stop': False,
-            'stop_iteration': self.budget,
-        }
-
-        # 初始点评估
-        print("评估初始点...")
-        readings = caget_many(self._all_obj_pvs)
-        initial_score, grp_scores = self._compute_score(readings)
-        print(f"初始评分: {initial_score:.4f}")
+        print("\u8bc4\u4f30\u521d\u59cb\u70b9...")
+        readings = caget_many(self.problem.all_obj_pvs)
+        initial_score, grp_scores = self.problem.compute_score(readings, caget)
+        print("\u521d\u59cb\u8bc4\u5206: {:.4f}".format(initial_score))
         if grp_scores:
             for g, s in zip(self.objective_groups, grp_scores):
-                print(f"  组 [{g['name']}]: {s:.4f}")
+                print("  \u7ec4 [{}]: {:.4f}".format(g['name'], s))
+        history.add_initial(initial_score, grp_scores)
 
-        history['scores'].append(initial_score)
-        history['group_scores'].append(grp_scores)
-        history['readings'].append(readings)
+        objective = ObjectiveFunction(
+            self.hardware, self.problem, history,
+            var_mgr.pvs, self._default_progress)
 
-        # 早停参数
-        es = self.early_stop_config
-        es_enabled = es.get('enabled', True)
-        es_patience = es.get('patience', 10)
-        es_min_improvement = es.get('min_relative_improvement', 0.005)
+        algo_cls = get_algorithm(self.algorithm)
+        if algo_cls is None:
+            print("\u7b97\u6cd5 {} \u672a\u77e5\uff0c\u4f7f\u7528 DE".format(self.algorithm))
+            algo_cls = get_algorithm("de")
 
-        best_score = initial_score
-        no_improve = 0
+        algo = algo_cls()
+        bounds = [(r[0], r[1]) for r in var_mgr.ranges]
 
-        # 优化循环
-        print(f"\n开始优化: {self.algorithm} 算法, {self.budget} 次迭代...")
+        start = time.time()
+        algo.run(objective, bounds, self.budget, self.algorithm_params,
+                 history, print)
+        history.elapsed_sec = time.time() - start
+        history.update_best()
 
-        for i in tqdm(range(self.budget), desc="优化进度"):
-            try:
-                candidate = optimizer.ask()
-                params = [candidate.kwargs[f"x{j}"] for j in range(len(var_mgr))]
-
-                self.hardware.apply(var_mgr.pvs, params)
-                readings = caget_many(self._all_obj_pvs)
-                score, grp_scores = self._compute_score(readings)
-
-                if np.isinf(score) or np.isnan(score):
-                    print(f"  警告: 迭代 {i+1} 无效评分 {score}")
-                    score = float('inf')
-
-                optimizer.tell(candidate, score)
-
-                history['iterations'].append(i + 1)
-                history['scores'].append(score)
-                history['group_scores'].append(grp_scores)
-                history['parameters'].append(params)
-                history['readings'].append(readings)
-
-                tqdm.write(f"  当前: {score:.4f} 最佳: {best_score:.4f}")
-
-                if es_enabled:
-                    if score < best_score and best_score > 0:
-                        rel_imp = (best_score - score) / best_score
-                        if rel_imp > es_min_improvement:
-                            best_score = score
-                            no_improve = 0
-                        else:
-                            no_improve += 1
-                    elif score < best_score:
-                        best_score = score
-                        no_improve = 0
-                    else:
-                        no_improve += 1
-
-                    if no_improve >= es_patience:
-                        print(f"\n早停! 连续 {es_patience} 次无显著改进")
-                        history['early_stop'] = True
-                        history['stop_iteration'] = i + 1
-                        break
-
-            except KeyboardInterrupt:
-                print("\n用户中断，正在回滚...")
-                self.hardware.rollback()
-                raise
-            except Exception as e:
-                print(f"\n迭代 {i+1} 错误: {e}")
-                continue
-
-        # 最佳结果
-        valid = [(j, s) for j, s in enumerate(history['scores'])
-                 if not np.isinf(s) and not np.isnan(s)]
-        if valid:
-            best_idx, best_score = min(valid, key=lambda x: x[1])
-            best_params = history['parameters'][best_idx]
-        else:
-            best_idx, best_score = 0, initial_score
-            best_params = initial_values
-
-        history['best_params'] = best_params
-        history['best_score'] = best_score
-        history['best_iteration_index'] = best_idx
-        history['_groups'] = [
-            {'pvs': g['pvs'], 'targets': g['targets']}
-            for g in self.objective_groups
-        ]
-
-        print(f"\n优化完成! 最佳评分: {best_score:.4f}")
-        return history
+        print("\n\u4f18\u5316\u5b8c\u6210! \u6700\u4f73\u8bc4\u5206: {:.4f}".format(history.best_score))
+        return history.to_dict()
 
     def rollback(self):
-        """手动触发回滚"""
         self.hardware.rollback()

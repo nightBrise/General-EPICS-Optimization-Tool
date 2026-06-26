@@ -1,4 +1,5 @@
 """变量 PV 管理器"""
+from __future__ import annotations
 import numpy as np
 from .epics_backend import caget_many
 

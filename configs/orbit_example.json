@@ -79,7 +79,7 @@
     "optimization": {
         // Nevergrad 算法名。可用: Compass, NGOpt, CMA, PSO, TwoPointsDE 等
         // 拼写不正确时自动退化为 NGOpt
-        "algorithm": "NGOpt",
+        "algorithm": "differential_evolution",
         // 最大迭代次数（实数：实际迭代 = budget × len(variables)）
         "budget": 10,
 
@@ -99,5 +99,19 @@
         "max_wait": 5,               // 等待设备稳定最大秒数
         "poll_interval": 0.2,        // 轮询间隔秒数（等稳定时读取频率）
         "min_adjust_interval": 0     // 两次调整最小间隔秒数（保护硬件，0=不限制）
+    },
+
+    // ============================================
+    // simulation: 模拟器配置（仅 --simulator 模式生效）
+    // ============================================
+    "simulation": {
+        "function": "griewank",
+        "mode": "scalar",
+        "initial_values": {
+            "LA-PS:CH00:SETI": 2.5,
+            "LA-PS:CV00:SETI": -3.1,
+            "LA-PS:CH01:SETI": 4.2,
+            "LA-PS:CV01:SETI": -1.8
+        }
     }
 }

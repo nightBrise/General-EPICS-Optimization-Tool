@@ -3,48 +3,27 @@
 提供固定 API（caput/caget）的数学基准函数，用于测试优化算法性能。
 已知极值，可加噪声，三种输出模式。
 """
+from __future__ import annotations
 import time
 import numpy as np
 
 
 # ============ 内置基准函数 ============
 
+def _griewank_fn(x):
+    n = len(x)
+    offsets = [100.0 * ((i * 137 + 53) % 13 - 6) for i in range(n)]
+    s = sum((xi - oi) ** 2 for xi, oi in zip(x, offsets)) / 4000.0
+    p = np.prod([np.cos((xi - oi) / np.sqrt(i + 1)) for i, (xi, oi) in enumerate(zip(x, offsets))])
+    return float(1.0 + s - p)
+
+
 BENCHMARK_FUNCTIONS = {
-    "sphere": {
-        "fn": lambda x: float(np.sum(np.array(x) ** 2)),
-        "optimum_x": None,
+    "griewank": {
+        "fn": _griewank_fn,
+        "optimum_x": [],
         "optimum_f": 0.0,
-        "range": [-5.12, 5.12],
-    },
-    "rosenbrock": {
-        "fn": lambda x: float(sum(
-            100.0 * (x[i + 1] - x[i] ** 2) ** 2 + (1.0 - x[i]) ** 2
-            for i in range(len(x) - 1)
-        )),
-        "optimum_x": [1.0],
-        "optimum_f": 0.0,
-        "range": [-2.0, 2.0],
-    },
-    "rastrigin": {
-        "fn": lambda x: float(
-            10.0 * len(x) + sum(
-                xi ** 2 - 10.0 * np.cos(2.0 * np.pi * xi)
-                for xi in x
-            )
-        ),
-        "optimum_x": [0.0],
-        "optimum_f": 0.0,
-        "range": [-5.12, 5.12],
-    },
-    "ackley": {
-        "fn": lambda x: float(
-            -20.0 * np.exp(-0.2 * np.sqrt(np.mean(np.array(x) ** 2)))
-            - np.exp(np.mean(np.cos(2.0 * np.pi * np.array(x))))
-            + 20.0 + np.exp(1)
-        ),
-        "optimum_x": [0.0],
-        "optimum_f": 0.0,
-        "range": [-32.0, 32.0],
+        "range": [-600.0, 600.0],
     },
 }
 
@@ -61,7 +40,7 @@ class TestFunctionSimulator:
     def __init__(self, config: dict = None):
         sim_cfg = (config or {}).get("simulation", {})
 
-        self._func_name = sim_cfg.get("function", "sphere")
+        self._func_name = sim_cfg.get("function", "griewank")
         self._mode = sim_cfg.get("mode", "scalar")
         self._noise_cfg = sim_cfg.get("noise", {})
         self._image_cfg = sim_cfg.get("image", {})
@@ -73,6 +52,14 @@ class TestFunctionSimulator:
         if config and "variables" in config:
             for v in config["variables"]:
                 self._var_names.append(v["pv"])
+
+        # 初始值：simulation.initial_values 覆盖默认 0.0
+        init_vals = sim_cfg.get("initial_values", {})
+        for pv_name, init_val in init_vals.items():
+            self._x[pv_name] = float(init_val)
+        for pv_name in self._var_names:
+            if pv_name not in self._x:
+                self._x[pv_name] = 0.0
 
         # 目标 PV 数量（vector 模式自动推算）
         self._n_outputs = 1
@@ -109,12 +96,12 @@ class TestFunctionSimulator:
         """已知极值位置"""
         opt = self._bf["optimum_x"]
         n = len(self._var_names) or 1
-        if opt is not None:
-            # 单元素列表 → 扩展为 N 维；N 元素 → 直接使用
-            if len(opt) == 1:
-                return opt * n
+        if opt and len(opt) == n:
             return list(opt)
-        # sphere 等默认为全零
+        if self._func_name == "griewank":
+            return [100.0 * ((i * 137 + 53) % 13 - 6) for i in range(n)]
+        if opt and len(opt) == 1:
+            return opt * n
         return [0.0] * n
 
     @property

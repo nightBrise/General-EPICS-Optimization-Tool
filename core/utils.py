@@ -1,4 +1,5 @@
 """工具函数：配置加载与验证"""
+from __future__ import annotations
 import re
 import json
 

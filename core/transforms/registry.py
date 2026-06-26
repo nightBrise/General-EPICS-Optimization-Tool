@@ -1,4 +1,5 @@
 """变换注册表"""
+from __future__ import annotations
 from .base import Transform
 
 TRANSFORM_REGISTRY = {}

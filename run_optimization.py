@@ -172,10 +172,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-    python run_optimization.py --config configs/orbit_full.json
-    python run_optimization.py --config config.json -y
-    python run_optimization.py --config config.json --budget 100
-    python run_optimization.py --config config.json --simulator
+    python run_optimization.py --config configs/test_benchmark.json --simulator -y
+    python run_optimization.py --config my_config.json
+    python run_optimization.py --config my_config.json --budget 100
+    python run_optimization.py --config my_config.json --algorithm de
         """
     )
     parser.add_argument('--config', required=True, help='配置文件路径')
@@ -185,6 +185,8 @@ def main():
                         help='跳过确认，直接开始')
     parser.add_argument('--simulator', action='store_true', default=False,
                         help='使用模拟器模式（默认真实 EPICS）')
+    parser.add_argument('--plot', action='store_true', default=False,
+                        help='优化完成后自动生成可视化图表')
     args = parser.parse_args()
 
     set_backend(use_simulator=args.simulator)
@@ -245,8 +247,24 @@ def main():
         _print_summary(result, config)
 
         # 保存
-        filepath = save_results(result, config)
-        print(f"  结果文件: {filepath}")
+        filepath, run_id = save_results(result, config)
+        if args.plot:
+            try:
+                from tools.plot_results import plot_run
+                plot_run(run_id)
+            except Exception as e:
+                print(f"  出图失败: {e}")
+        elif not args.yes:
+            try:
+                answer = input("  Generate plot? [y/N]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = ''
+            if answer == 'y':
+                try:
+                    from tools.plot_results import plot_run
+                    plot_run(run_id)
+                except Exception as e:
+                    print(f"  Plot failed: {e}")
     except KeyboardInterrupt:
         print("\n用户中断")
         sys.exit(1)

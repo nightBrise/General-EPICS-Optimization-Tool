@@ -1,4 +1,6 @@
 """硬件控制器：caput + 验证 + 等待稳定 + 回滚"""
+from __future__ import annotations
+import math
 import time
 from .epics_backend import caget, caput, caget_many
 
@@ -36,13 +38,15 @@ class HardwareController:
         self._initial_values = list(values)
 
     def apply(self, pvs: list[str], values: list[float],
-              clamp_fn=None) -> bool:
+              clamp_fn=None, iteration=0, failure_log=None) -> bool:
         """设置变量 PV 值（含安全验证）
 
         Args:
             pvs: 变量 PV 列表
             values: 目标值列表
             clamp_fn: 可选的裁剪函数
+            iteration: 当前迭代次数（用于失败追踪）
+            failure_log: 失败记录列表
 
         Returns:
             bool: 是否全部设置成功
@@ -53,24 +57,45 @@ class HardwareController:
         if clamp_fn:
             values = clamp_fn(values)
 
+        valid_pvs = []
+        valid_values = []
+        for pv, val in zip(pvs, values):
+            if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
+                msg = "NaN/Inf value"
+                print(f"  跳过 {pv}: 值 {val} 无效（{msg}）")
+                if failure_log is not None:
+                    failure_log.append({
+                        'iteration': iteration, 'pv_name': pv,
+                        'target_val': val, 'error_msg': msg
+                    })
+                continue
+            valid_pvs.append(pv)
+            valid_values.append(val)
+
+        if not valid_pvs:
+            return True
+
         elapsed = time.time() - self._last_adjust_time
         if elapsed < self.min_adjust_interval:
             wait = self.min_adjust_interval - elapsed
             print(f"  等待硬件调整间隔: {wait:.1f}秒")
             time.sleep(wait)
 
-        pvs_list = list(pvs)
-        values_list = list(values)
-        for pv, val in zip(pvs_list, values_list):
+        for pv, val in zip(valid_pvs, valid_values):
             success = self._write_with_verify(pv, val)
             if not success:
+                if failure_log is not None:
+                    failure_log.append({
+                        'iteration': iteration, 'pv_name': pv,
+                        'target_val': val, 'error_msg': 'caput failed after retries'
+                    })
                 if self.rollback_on_failure:
                     self.rollback()
                     raise RuntimeError(
                         f"PV {pv} 写入失败（目标={val}），已回滚到初始值")
                 return False
 
-        all_settled, failed = self._wait_for_settled(pvs_list, values_list)
+        all_settled, failed = self._wait_for_settled(valid_pvs, valid_values)
         if not all_settled:
             print(f"  警告: 以下设备未稳定: {list(failed.keys())}")
 

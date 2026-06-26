@@ -1,0 +1,29 @@
+{
+    "name": "my_optimization",
+
+    "variables": [
+        {"pv": "YOUR:PV:TO:ADJUST", "range": [-1, 1]}
+    ],
+
+    "objectives": {
+        "groups": [{
+            "name": "main",
+            "weight": 1.0,
+            "pvs": [
+                {"pv": "YOUR:PV:TO:OBSERVE", "target": 0.0}
+            ],
+            "scoring": {"method": "l2"}
+        }],
+        "overall_scoring": "weighted_sum"
+    },
+
+    "optimization": {
+        "algorithm": "differential_evolution",
+        "budget": 50
+    },
+
+    "hardware": {
+        "min_adjust_interval": 6,
+        "tolerance": 0.001
+    }
+}
