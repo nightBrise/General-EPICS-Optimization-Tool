@@ -38,13 +38,16 @@ python run_optimization.py --config my_config.json
 
 ### 第三步：选算法
 
+在配置文件中写 `"algorithm": "differential_evolution"`，或通过 CLI 临时覆盖：
+
 ```bash
-# 所有算法统一通过 --algorithm 切换
+# 配置文件中写 "algorithm": "differential_evolution" → 运行即用
+# 也可通过 CLI 临时覆盖：
 python run_optimization.py --config my_config.json --simulator -y --algorithm de           # Differential Evolution（默认）
 python run_optimization.py --config my_config.json --simulator -y --algorithm nelder-mead  # Nelder-Mead
 python run_optimization.py --config my_config.json --simulator -y --algorithm ngopt        # Nevergrad NGOpt（需安装）
 python run_optimization.py --config my_config.json --simulator -y --algorithm cma          # Nevergrad CMA（需安装）
-python run_optimization.py --config my_config.json --simulator -y --algorithm bayesian     # Bayesian（需 scikit-learn）
+python run_optimization.py --config my_config.json --simulator -y --algorithm bayesian     # Bayesian（需 sklearn）
 ```
 
 ## 配置结构速览
