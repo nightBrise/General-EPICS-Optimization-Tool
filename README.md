@@ -66,18 +66,19 @@ python run_optimization.py --config my_config.json --simulator -y --algorithm ba
 
 ```mermaid
 flowchart LR
-    A["config.json<br/>-------------------<br/>只填 PV+range+target"] --> B["GenericOptimizer<br/>(编排器)"]
-    B --> C["Problem<br/>(PV索引+评分)"]
-    B --> D["History<br/>(迭代记录)"]
-    B --> E["Objective<br/>(callable→float)"]
-    B --> F["算法插件<br/>-------------------<br/>@register_algorithm<br/>追加不改核心↓"]
+    A["config.json<br/>━━━━━━━<br/>只填PV+range+target<br/>不写 Python"] -->|"①解析"| B["GenericOptimizer<br/>(编排器)"]
+    B -->|"②创建"| C["Problem<br/>(PV索引+评分)"]
+    B -->|"②创建"| D["History<br/>(迭代记录)"]
+    B -->|"③构建"| E["Objective<br/>callable(x)→float<br/>一次调用=ask→apply→read→score"]
+    B -->|"④分发"| F["@register_algorithm<br/>━━━━━━━<br/>追加不改核心↓"]
     F --> F1["DE"] & F2["NM"] & F3["NGOpt"] & F4["CMA"] & F5["Bayesian"]
-    E --> G["HardwareController<br/>(caput+验证)"]
-    G --> H["EPICSBackend<br/>(单例)<br/>-------------------<br/>同一份代码<br/>simulator⇔real"]
-    H --> H1["pyepics<br/>(真实)"]
-    H --> H2["Griewank<br/>(模拟)"]
-    D --> I["SQLite · 6表<br/>-------------------<br/>N次迭代数据<br/>一行SQL可查"]
-    I --> J["6图 PNG<br/>-------------------<br/>一键出图<br/>--plot"]
+    E -->|"apply(pvs,values)"| G["HardwareController<br/>(caput+验证+回滚)"]
+    G -->|"caput/caget"| H["EPICSBackend (单例)<br/>━━━━━━━<br/>同一份代码<br/>simulator⇔real"]
+    H --> H1["pyepics"] & H2["Griewank"]
+    E -->|"⑤ append(iter,score,params)"| D
+    D -->|"⑥ to_dict()"| I["SQLite · 6表<br/>━━━━━━━<br/>N次迭代<br/>一行SQL可查"]
+    I -->|"⑦ plot_run(id)"| J["6图 PNG<br/>━━━━━━━<br/>一键出图<br/>--plot"]
+    B -->|"⑧ to_dict()"| K["CLI打印<br/>run_id→询问出图"]
 
     style A fill:#1565c0,color:#fff
     style B fill:#e65100,color:#fff
@@ -88,80 +89,10 @@ flowchart LR
     style H fill:#6a1b9a,color:#fff
     style I fill:#00695c,color:#fff
     style J fill:#f57f17,color:#fff
+    style K fill:#e65100,color:#fff
 ```
 
-### 为什么"通用"
-
-所有可变部分都通过**插件注册表**接入，不改核心代码：
-
-```
-                  config.json  ← 用户只填: PV + range + target
-                        │
-          ┌─────────────┼─────────────┐
-          ▼             ▼             ▼
-   variables[]   objectives[]    optimization{}
-   VariableManager ScoringEngine  AlgorithmRegistry
-          │             │             │
-          │         @register_   @register_
-          │         scorer("l2") algorithm("de")
-          │             │             │
-          │        ┌────┼────┐   ┌────┼────┐
-          │        ▼    ▼    ▼   ▼    ▼    ▼
-          │       l1   l2  max  DE   NM  NGOpt ....  ← 无限扩展
-          │                      CMA Bayesian "my_algo"
-          ▼
-   EPICSBackend (单例)  ← 同一份代码跑模拟器和真实机器
-          │
-    ┌─────┴─────┐
-    ▼           ▼
-  pyepics   Griewank
- (真实)     (模拟)
-```
-
-| 层 | 要扩展什么 | 怎么写 | 改核心文件？ |
-|----|-----------|--------|------------|
-| **算法** | 新优化策略 | `@register_algorithm("my")` + 一个文件 | ❌ 不改 |
-| **评分** | 新评估方式 | `@register_scorer("my")` + 一个文件 | ❌ 不改 |
-| **变换** | 新数据预处理 | `@register_transform("my")` + 一个文件 | ❌ 不改 |
-| **后端** | 新硬件驱动 | 实现 `caput(pv,val)` / `caget(pv)` | ❌ 不改 |
-| **配置** | 新任务 | 一个 JSON 文件 | ❌ 不改 |
-
-### 数据流详解
-
-```
-   config.json                    ← 用户填写: variables[], objectives{}, optimization{}, hardware{}
-       │
-       ▼
-   GenericOptimizer.__init__()    ← 解析配置 → 创建 Problem + 初始化 History
-       │
-       ▼  run() ──────────────────────────────────────────┐
-       │                                                   │
-       ├─ ① 读取初始值                                     │
-       │    var_mgr.read_initial_values() → caget(pvs)     │
-       │    Fix: 边界裁剪 (initial ∈ [lo, hi])              │
-       │                                                   │
-       ├─ ② 初始评估                                       │
-       │    caget_many(obj_pvs) → problem.compute_score()  │
-       │    → history.add_initial(score, group_scores)    │
-       │                                                   │
-       ├─ ③ 构建目标函数                                   │
-       │    ObjectiveFunction(hw, problem, history, pvs)  │
-       │       └─ __call__(x) → 每次迭代:                  │
-       │            hw.apply() → caget_many() → score     │
-       │            → history.append(...)                  │
-       │                                                   │
-       ├─ ④ 算法分发                                       │
-       │    algo = get_algorithm("de")                    │
-       │    algo.run(objective, bounds, budget, history)   │
-       │       └─ DE/NM/NGOpt/CMA/Bayesian 统一接口       │
-       │                                                   │
-       ├─ ⑤ 结果提取                                       │
-       │    history.update_best() → best_score, best_params │
-       │                                                   │
-       └─ ⑥ 持久化 + 可视化                                │
-            history.to_dict() → save_results() → SQLite    │
-            → "Generate plot?" → plot_run(run_id) → PNG   │
-```
+> **图例**：数字 ①—⑧ 对应运行时的 8 个步骤。"━━━" 分隔线下是通用性说明。粉色节点 = 无需改核心代码即可扩展。
 
 ## CLI
 
