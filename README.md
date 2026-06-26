@@ -79,15 +79,15 @@ flowchart LR
     D --> I["SQLite · 6表"]
     I --> J["6图 PNG"]
 
-    style A fill:#e1f5fe
-    style B fill:#fff3e0
-    style C fill:#e8f5e9
-    style D fill:#e8f5e9
-    style E fill:#e8f5e9
-    style F fill:#fce4ec
-    style H fill:#f3e5f5
-    style I fill:#e0f2f1
-    style J fill:#fff8e1
+    style A fill:#1565c0,color:#fff
+    style B fill:#e65100,color:#fff
+    style C fill:#2e7d32,color:#fff
+    style D fill:#2e7d32,color:#fff
+    style E fill:#2e7d32,color:#fff
+    style F fill:#c62828,color:#fff
+    style H fill:#6a1b9a,color:#fff
+    style I fill:#00695c,color:#fff
+    style J fill:#f57f17,color:#fff
 ```
 
 ### 为什么"通用"
