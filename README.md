@@ -129,6 +129,42 @@ flowchart TB
     style PLOT fill:#fff8e1
 ```
 
+### 为什么"通用"
+
+所有可变部分都通过**插件注册表**接入，不改核心代码：
+
+```
+                  config.json  ← 用户只填: PV + range + target
+                        │
+          ┌─────────────┼─────────────┐
+          ▼             ▼             ▼
+   variables[]   objectives[]    optimization{}
+   VariableManager ScoringEngine  AlgorithmRegistry
+          │             │             │
+          │         @register_   @register_
+          │         scorer("l2") algorithm("de")
+          │             │             │
+          │        ┌────┼────┐   ┌────┼────┐
+          │        ▼    ▼    ▼   ▼    ▼    ▼
+          │       l1   l2  max  DE   NM  NGOpt ....  ← 无限扩展
+          │                      CMA Bayesian "my_algo"
+          ▼
+   EPICSBackend (单例)  ← 同一份代码跑模拟器和真实机器
+          │
+    ┌─────┴─────┐
+    ▼           ▼
+  pyepics   Griewank
+ (真实)     (模拟)
+```
+
+| 层 | 要扩展什么 | 怎么写 | 改核心文件？ |
+|----|-----------|--------|------------|
+| **算法** | 新优化策略 | `@register_algorithm("my")` + 一个文件 | ❌ 不改 |
+| **评分** | 新评估方式 | `@register_scorer("my")` + 一个文件 | ❌ 不改 |
+| **变换** | 新数据预处理 | `@register_transform("my")` + 一个文件 | ❌ 不改 |
+| **后端** | 新硬件驱动 | 实现 `caput(pv,val)` / `caget(pv)` | ❌ 不改 |
+| **配置** | 新任务 | 一个 JSON 文件 | ❌ 不改 |
+
 ### 数据流详解
 
 ```
