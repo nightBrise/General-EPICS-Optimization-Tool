@@ -66,18 +66,18 @@ python run_optimization.py --config my_config.json --simulator -y --algorithm ba
 
 ```mermaid
 flowchart LR
-    A["config.json"] --> B["GenericOptimizer<br/>(编排器)"]
+    A["config.json<br/>-------------------<br/>只填 PV+range+target"] --> B["GenericOptimizer<br/>(编排器)"]
     B --> C["Problem<br/>(PV索引+评分)"]
     B --> D["History<br/>(迭代记录)"]
     B --> E["Objective<br/>(callable→float)"]
-    B --> F["算法插件"]
+    B --> F["算法插件<br/>-------------------<br/>@register_algorithm<br/>追加不改核心↓"]
     F --> F1["DE"] & F2["NM"] & F3["NGOpt"] & F4["CMA"] & F5["Bayesian"]
     E --> G["HardwareController<br/>(caput+验证)"]
-    G --> H["EPICSBackend<br/>(单例)"]
+    G --> H["EPICSBackend<br/>(单例)<br/>-------------------<br/>同一份代码<br/>simulator⇔real"]
     H --> H1["pyepics<br/>(真实)"]
     H --> H2["Griewank<br/>(模拟)"]
-    D --> I["SQLite · 6表"]
-    I --> J["6图 PNG"]
+    D --> I["SQLite · 6表<br/>-------------------<br/>N次迭代数据<br/>一行SQL可查"]
+    I --> J["6图 PNG<br/>-------------------<br/>一键出图<br/>--plot"]
 
     style A fill:#1565c0,color:#fff
     style B fill:#e65100,color:#fff
