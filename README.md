@@ -65,68 +65,29 @@ python run_optimization.py --config my_config.json --simulator -y --algorithm ba
 ## 架构
 
 ```mermaid
-flowchart TB
-    subgraph CLI["入口"]
-        CLI_ARG["--config file.json<br/>--budget N --algorithm X<br/>--simulator --plot"]
-    end
+flowchart LR
+    A["config.json"] --> B["GenericOptimizer<br/>(编排器)"]
+    B --> C["Problem<br/>(PV索引+评分)"]
+    B --> D["History<br/>(迭代记录)"]
+    B --> E["Objective<br/>(callable→float)"]
+    B --> F["算法插件"]
+    F --> F1["DE"] & F2["NM"] & F3["NGOpt"] & F4["CMA"] & F5["Bayesian"]
+    E --> G["HardwareController<br/>(caput+验证)"]
+    G --> H["EPICSBackend<br/>(单例)"]
+    H --> H1["pyepics<br/>(真实)"]
+    H --> H2["Griewank<br/>(模拟)"]
+    D --> I["SQLite · 6表"]
+    I --> J["6图 PNG"]
 
-    subgraph Core["核心层"]
-        direction TB
-        OPTIMIZER["GenericOptimizer<br/>(编排器 · 225行)"]
-        PROBLEM["OptimizationProblem<br/>(PV索引 + 评分)"]
-        HISTORY["History<br/>(类型化迭代记录)"]
-        OBJECTIVE["ObjectiveFunction<br/>(callable(x) → float)"]
-        HW["HardwareController<br/>(caput + 验证 + 回滚)"]
-        VM["VariableManager<br/>(PV管理 + 边界)"]
-    end
-
-    subgraph Algo["算法插件"]
-        direction LR
-        DE["DE<br/>(scipy)"]
-        NM["Nelder-Mead<br/>(scipy)"]
-        NG["NGOpt<br/>(Nevergrad)"]
-        CMA["CMA<br/>(Nevergrad)"]
-        BO["Bayesian<br/>(skopt→sklearn→DE)"]
-    end
-
-    subgraph Backend["后端路由"]
-        BACKEND["EPICSBackend<br/>(单例)"]
-        EPICS["pyepics<br/>(真实EPICS)"]
-        SIM["TestFunctionSimulator<br/>(Griewank)"]
-    end
-
-    subgraph Storage["存储层"]
-        direction LR
-        SQLITE["SQLite · 6表<br/>runs · variables · objectives<br/>group_mapping · iterations<br/>failure_log"]
-        PLOT["6图 2×3 PNG<br/>收敛曲线 · PV演化<br/>热图 · 分布 · 改善"]
-    end
-
-    CLI_ARG -->|"config.json"| OPTIMIZER
-    OPTIMIZER -->|"解析 objectives"| PROBLEM
-    OPTIMIZER -->|"创建"| HISTORY
-    OPTIMIZER -->|"构建"| OBJECTIVE
-    OPTIMIZER -->|"分发"| Algo
-
-    OBJECTIVE -->|"apply(pvs, values)"| HW
-    OBJECTIVE -->|"caget_many / compute_score"| PROBLEM
-    OBJECTIVE -->|"append(iter, score, params)"| HISTORY
-
-    HW -->|"caput / caget"| BACKEND
-    BACKEND -->|"use_simulator=True"| SIM
-    BACKEND -->|"use_simulator=False"| EPICS
-
-    HISTORY -->|"to_dict()"| SQLITE
-    SQLITE -->|"plot_run(run_id)"| PLOT
-
-    style CLI_ARG fill:#e1f5fe
-    style OPTIMIZER fill:#fff3e0
-    style PROBLEM fill:#e8f5e9
-    style HISTORY fill:#e8f5e9
-    style OBJECTIVE fill:#e8f5e9
-    style Algo fill:#fce4ec
-    style BACKEND fill:#f3e5f5
-    style SQLITE fill:#e0f2f1
-    style PLOT fill:#fff8e1
+    style A fill:#e1f5fe
+    style B fill:#fff3e0
+    style C fill:#e8f5e9
+    style D fill:#e8f5e9
+    style E fill:#e8f5e9
+    style F fill:#fce4ec
+    style H fill:#f3e5f5
+    style I fill:#e0f2f1
+    style J fill:#fff8e1
 ```
 
 ### 为什么"通用"
