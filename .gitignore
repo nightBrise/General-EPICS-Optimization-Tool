@@ -1,14 +1,15 @@
 __pycache__/
 *.pyc
 
+# 开发文件
+docs/compose/
+.mimocode/
+
 # 测试配置文件
 configs/test_*.json
 
 # 结果文件
 results/
-
-# 旧代码
-legacy/
 
 # IDE
 .vscode/
